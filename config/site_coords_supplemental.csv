@@ -1,0 +1,36 @@
+site_code,name,latitude,longitude,rkm,site_type,source
+BCHINL,Lake Billy Chinook,44.583737,-121.321127,328.177,Other,mrr
+BEAV2C,"Beaver Creek, Methow River",48.435095,-120.022301,843.057,River,mrr
+CHERBT,Chewuch River Bridge Rotary Screw Trap,48.477225,-120.186416,843.080.001,TraporWeir,mrr
+CHEWUR,Chewuch River,48.750507,-120.137116,843.080,River,mrr
+CHIKAC,"Chikamin Creek, tributary to Chiwawa River",47.954367,-120.720292,754.077.023,River,mrr
+CHIW,Chiwawa Weir,47.788121,-120.651145,754.077.002,TraporWeir,mrr
+CHIWAR,Chiwawa River,47.950633,-120.776839,754.077,River,mrr
+CHIWAT,"Chiwawa River Trap, 0.5 km below CHIP acclimation pond",47.787307,-120.655314,754.077.002,TraporWeir,mrr
+EIGHTC,"Eightmile Creek, Chewuch River",48.694557,-120.263975,843.080.018,River,mrr
+ENTIAR,Entiat River,47.910970,-120.490331,778,River,mrr
+FOGDEW,"Foggy Dew Creek, Methow River watershed",48.171338,-120.275364,843.035.009,River,mrr
+GLC,"Gold Creek, Methow River",48.188368,-120.097128,843.035.001,Instream Remote Detection System,interrogation
+GOLD2C,"Gold Creek, Methow River",48.190329,-120.155537,843.035,River,mrr
+HANSPC,"Hancock Springs Creek, tributary to Methow River",48.537920,-120.338233,843.097,River,mrr
+ICICLC,Icicle Creek,47.607841,-120.881419,754.041,River,mrr
+LBRIC,"Little Bridge Creek,tributary to Twisp River",48.428449,-120.356446,843.066.014,River,mrr
+LMR,Lower Methow River at Pateros,48.074923,-119.956143,843.008,Instream Remote Detection System,interrogation
+LOSTR,"Lost River, Methow River Basin",48.782236,-120.396830,843.122,River,mrr
+MADRVR,Mad River (Entiat River watershed),47.820929,-120.516178,778.017,River,mrr
+METHR,Methow River,48.353595,-120.109236,843,River,mrr
+METRWT,Upper Methow River Rotary Screw Trap,48.474824,-120.190456,843.081,TraporWeir,mrr
+METTRP,Methow Smolt Trap at McFarland Creek Road Bridge,48.151085,-120.056584,843.030,TraporWeir,mrr
+PESHAR,Peshastin River,47.456842,-120.658820,754.029,River,mrr
+RREBYP,RRE - Release into the Facility Bypass Flume/Pipe,47.531237,-120.299184,763,IntraDamReleaseSite,mrr
+TUM,"Tumwater Dam, Wenatchee River",47.616653,-120.723184,754.044,Dam,mrr
+TWISPR,Twisp River,48.353884,-120.365091,843.066,River,mrr
+TWISPW,Twisp River Weir (WDFW),48.379881,-120.243074,843.066.013,TraporWeir,mrr
+TWITRP,Twisp River rotary smolt trap,48.367273,-120.138784,843.066.002,TraporWeir,mrr
+WEL,Wells Dam,47.947302,-119.864549,830,Dam,mrr
+WELFBY,WEL - Release into the Forebay within 0.5 km upstream of Dam,47.952911,-119.866358,830,IntraDamReleaseSite,mrr
+WELH,Wells Hatchery,47.946893,-119.870615,830,Hatchery,mrr
+WELLD1,WEL - Release into the East Adult Fish Ladder,47.947382,-119.862960,830,IntraDamReleaseSite,mrr
+WELLD2,WEL - Release into the West Adult Fish Ladder,47.946626,-119.867211,830,IntraDamReleaseSite,mrr
+WELTAL,WEL - Release into the Tailrace within 0.5 km downstream of Dam,47.942926,-119.862758,830,IntraDamReleaseSite,mrr
+WOLFC,"Wolf Creek, Methow River",48.477682,-120.374240,843.085,River,mrr

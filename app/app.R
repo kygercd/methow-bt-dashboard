@@ -2,19 +2,25 @@
 # -------------------------------------------------------------
 # Methow Bull Trout Dashboard - Shiny app
 #
-# Reads CSVs that were pulled by R/fetch_ptagis.R (committed
-# daily by the GitHub Action). When run locally it loads from
-# ../data/ ; when deployed to shinyapps.io it falls back to the
-# raw GitHub URLs so the deployment doesn't need to bundle data.
+# Reads CSVs pulled daily by R/fetch_ptagis.R, R/fetch_dart_wells.R,
+# and R/build_site_metadata.R. When run locally it loads from
+# ../data/ ; on shinyapps.io it falls back to raw GitHub URLs so
+# the deployed app picks up new data automatically.
 #
-# Data sources:
-#   data/methow_basin_bt_tagging.csv          (PTAGIS)
-#   data/wells_dam_bt_tagging.csv             (PTAGIS)
-#   data/upper_columbia_bt_recapture.csv      (PTAGIS)
-#   data/upper_columbia_bt_interrogation.csv  (PTAGIS)
-#   data/wells_dam_counts.csv                 (DART, when wired)
-#   data/last_update.csv                      (manifest)
-#   config/site_metadata.csv                  (PTAGIS sites API)
+# Map tab has three modes:
+#   1. Last detection - one bubble per detection site, sized by
+#      number of distinct tags last detected there. Click for the
+#      per-fish detail.
+#   2. Tagged         - one bubble per release site, sized by
+#      tags released (filterable by year + life stage).
+#   3. Recapture      - one bubble per recapture site, sized by
+#      recap events (filterable by year + life stage).
+#
+# Life-stage classification (by length-mm at the relevant event):
+#   <100  = Juvenile
+#   100-399 = Sub-adult
+#   >=400 = Adult
+#   missing = Unknown
 # -------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -37,9 +43,7 @@ GH_BRANCH <- "main"
 GH_RAW    <- sprintf("https://raw.githubusercontent.com/%s/%s/%s",
                      GH_OWNER, GH_REPO, GH_BRANCH)
 
-# Where to look for files: local first, then GitHub raw.
 local_root <- {
-  # If run from app/ folder, project root is one level up.
   here <- tryCatch(
     rprojroot::find_root(rprojroot::has_file("DESCRIPTION") |
                            rprojroot::has_dir(".github")),
@@ -48,17 +52,17 @@ local_root <- {
   if (is.null(here)) getwd() else here
 }
 
-# load_csv("data/foo.csv") tries local first, then GH raw.
+`%||%` <- function(a, b) if (is.null(a) || (length(a) == 1 && is.na(a))) b else a
+
 load_csv <- function(rel_path, ...) {
   local_fp <- file.path(local_root, rel_path)
   if (file.exists(local_fp)) {
-    message("Loading local: ", local_fp)
-    return(readr::read_csv(local_fp, show_col_types = FALSE, ...))
+    return(suppressWarnings(readr::read_csv(local_fp,
+                                            show_col_types = FALSE, ...)))
   }
   url <- paste0(GH_RAW, "/", rel_path)
-  message("Loading remote: ", url)
   tryCatch(
-    readr::read_csv(url, show_col_types = FALSE, ...),
+    suppressWarnings(readr::read_csv(url, show_col_types = FALSE, ...)),
     error = function(e) {
       warning("Failed to load ", rel_path, ": ", conditionMessage(e))
       NULL
@@ -68,38 +72,59 @@ load_csv <- function(rel_path, ...) {
 
 # ---- Helpers ------------------------------------------------
 
-# PTAGIS "site" columns are formatted like "WEA - Wells Dam Adult East".
-# Extract just the site code (before the first " - ").
+# Site columns are formatted "CODE - Description". Extract code.
 extract_site_code <- function(x) {
   if (is.null(x)) return(character())
   trimws(stringr::str_extract(as.character(x), "^[^ ]+"))
 }
 
-# Try to coerce date-ish columns. PTAGIS uses MM/DD/YYYY HH:MM:SS for
-# datetimes and MM/DD/YYYY for dates.
-parse_ptagis_dt <- function(x) {
+# PTAGIS: dates as "MM/DD/YYYY" or "MM/DD/YYYY HH:MM:SS [AM/PM]".
+parse_dt <- function(x) {
   if (is.null(x)) return(as.POSIXct(NA))
   if (inherits(x, "POSIXt")) return(x)
-  out <- suppressWarnings(lubridate::mdy_hms(x, quiet = TRUE, tz = "America/Los_Angeles"))
-  if (all(is.na(out))) {
-    out <- suppressWarnings(lubridate::mdy(x, quiet = TRUE))
-    out <- as.POSIXct(out, tz = "America/Los_Angeles")
+  out <- suppressWarnings(lubridate::mdy_hms(x, quiet = TRUE,
+                                             tz = "America/Los_Angeles"))
+  miss <- is.na(out)
+  if (any(miss)) {
+    out2 <- suppressWarnings(lubridate::mdy(x[miss], quiet = TRUE))
+    out[miss] <- as.POSIXct(out2, tz = "America/Los_Angeles")
   }
   out
 }
 
-# Pick the first column name from `candidates` that exists in df,
-# returning NA-vector of length nrow(df) if none match.
-first_col <- function(df, candidates) {
-  hit <- intersect(candidates, names(df))
-  if (length(hit) == 0) return(rep(NA, nrow(df)))
-  df[[hit[1]]]
+life_stage <- function(len_mm) {
+  len <- suppressWarnings(as.numeric(len_mm))
+  dplyr::case_when(
+    is.na(len)  ~ "Unknown",
+    len <  100  ~ "Juvenile",
+    len <  400  ~ "Sub-adult",
+    TRUE        ~ "Adult"
+  )
 }
 
-# ---- Reactive data loaders ---------------------------------
-# Wrapped in functions so the app stays responsive during load.
+LIFE_STAGE_LEVELS <- c("Adult", "Sub-adult", "Juvenile", "Unknown")
+LIFE_STAGE_COLORS <- c(Adult     = "#1f78b4",
+                       `Sub-adult` = "#33a02c",
+                       Juvenile  = "#ff7f00",
+                       Unknown   = "#999999")
 
+# Site coords merge: supplemental wins on conflict.
+build_sites <- function(meta, supp) {
+  if (is.null(meta) || nrow(meta) == 0) meta <- tibble(site_code = character())
+  if (is.null(supp) || nrow(supp) == 0) supp <- tibble(site_code = character())
+  bind_rows(supp, meta) |>
+    filter(!is.na(site_code), nzchar(site_code)) |>
+    distinct(site_code, .keep_all = TRUE) |>
+    select(any_of(c("site_code","name","latitude","longitude",
+                    "site_type","rkm")))
+}
+
+# ---- Loaders ------------------------------------------------
 load_all_data <- function() {
+  meta <- load_csv("config/site_metadata.csv")
+  supp <- load_csv("config/site_coords_supplemental.csv")
+  sites <- build_sites(meta, supp)
+
   list(
     tagging_methow      = load_csv("data/methow_basin_bt_tagging.csv"),
     tagging_wells       = load_csv("data/wells_dam_bt_tagging.csv"),
@@ -107,69 +132,112 @@ load_all_data <- function() {
     interrogation       = load_csv("data/upper_columbia_bt_interrogation.csv"),
     wells_counts        = load_csv("data/wells_dam_counts.csv"),
     last_update         = load_csv("data/last_update.csv"),
-    sites               = load_csv("config/site_metadata.csv")
+    sites               = sites
   )
 }
 
-# Build a tidy, joinable detections frame from the interrogation
-# summary. Standardises column names so the rest of the app can
-# rely on: tag_code, site_code, site_name, species, first_obs,
-# last_obs, obs_count.
-tidy_interrogation <- function(df, sites = NULL) {
-  if (is.null(df) || nrow(df) == 0) {
-    return(tibble(
-      tag_code   = character(),
-      site_code  = character(),
-      site_name  = character(),
-      species    = character(),
-      first_obs  = as.POSIXct(character()),
-      last_obs   = as.POSIXct(character()),
-      obs_count  = integer(),
-      latitude   = numeric(),
-      longitude  = numeric()
-    ))
+# Add lat/lon to a frame that already has site_code.
+attach_coords <- function(df, sites) {
+  if (is.null(df) || nrow(df) == 0) return(df)
+  if (is.null(sites) || nrow(sites) == 0) {
+    df$latitude  <- NA_real_
+    df$longitude <- NA_real_
+    df$site_name <- df$site_code
+    return(df)
   }
+  s <- sites |>
+    select(site_code, latitude, longitude,
+           site_name = name)
+  left_join(df, s, by = "site_code")
+}
 
+# ---- Mode 1: Last detection (interrogation summary) ---------
+tidy_last_detection <- function(df, sites) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
   out <- tibble(
-    tag_code  = first_col(df, c("tag_code", "tag", "pit_tag",
-                                "tag_code_decimal", "tag_code_hex")),
-    site_raw  = first_col(df, c("site", "site_name", "obs_site",
-                                "interrogation_site")),
-    species   = first_col(df, c("mark_species_name", "species",
-                                "mark_species", "release_species_name")),
-    first_obs = first_col(df, c("first_obs_date", "first_obs",
-                                "min_obs_date", "first_obs_time",
-                                "first_observation_date")),
-    last_obs  = first_col(df, c("last_obs_date", "last_obs",
-                                "max_obs_date", "last_obs_time",
-                                "last_observation_date")),
-    obs_count = first_col(df, c("obs_count", "n_obs", "detection_count",
-                                "num_obs", "observation_count"))
+    tag_code     = df$tag,
+    site_code    = extract_site_code(df$site),
+    site_label   = df$site,
+    first_obs    = parse_dt(df$first_time),
+    last_obs     = parse_dt(df$last_time),
+    species      = df$species_name,
+    release_site = df$release_site,
+    release_date = parse_dt(df$release_date),
+    mark_length  = suppressWarnings(as.numeric(df$mark_length)),
+    obs_count    = suppressWarnings(as.integer(df$count))
   ) |>
-    mutate(
-      site_code = extract_site_code(site_raw),
-      site_name = ifelse(grepl(" - ", site_raw, fixed = TRUE),
-                         sub("^[^-]+-\\s*", "", site_raw),
-                         site_raw),
-      first_obs = parse_ptagis_dt(first_obs),
-      last_obs  = parse_ptagis_dt(last_obs),
-      obs_count = suppressWarnings(as.integer(obs_count))
-    ) |>
-    select(-site_raw)
-
-  if (!is.null(sites) && nrow(sites) > 0) {
-    join_cols <- intersect(c("site_code", "latitude", "longitude",
-                             "name", "rkm"), names(sites))
-    if ("site_code" %in% join_cols) {
-      out <- out |>
-        left_join(sites |> select(any_of(join_cols)),
-                  by = "site_code")
-    }
-  }
+    mutate(life_stage = life_stage(mark_length)) |>
+    attach_coords(sites)
+  # Each tag may detect at multiple sites; keep all rows so
+  # different sites get bubbles.
   out
 }
 
+# ---- Mode 2: Tagging ----------------------------------------
+tidy_tagging <- function(df, sites) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  tibble(
+    tag_code     = df$tag,
+    site_code    = extract_site_code(df$release_site),
+    site_label   = df$release_site,
+    release_date = parse_dt(df$release_date),
+    mark_date    = parse_dt(df$mark_date),
+    length       = suppressWarnings(as.numeric(df$length)),
+    species      = df$species_name,
+    rear_type    = df$rear_type_name,
+    mark_data_project = df$mark_data_project
+  ) |>
+    mutate(
+      life_stage = life_stage(length),
+      year = lubridate::year(release_date)
+    ) |>
+    filter(!is.na(site_code), nzchar(site_code)) |>
+    attach_coords(sites)
+}
+
+# ---- Mode 3: Recapture --------------------------------------
+tidy_recapture <- function(df, sites) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  tibble(
+    tag_code        = df$tag,
+    site_code       = extract_site_code(df$recap_site),
+    site_label      = df$recap_site,
+    recap_date      = parse_dt(df$recap_date),
+    recap_length    = suppressWarnings(as.numeric(df$recap_length)),
+    recap_method    = df$recap_capture_method_name,
+    species         = df$species_name,
+    rear_type       = df$rear_type_name,
+    mark_date       = parse_dt(df$mark_date),
+    mark_site       = df$mark_site
+  ) |>
+    mutate(
+      life_stage = life_stage(recap_length),   # at recap, per user
+      year = lubridate::year(recap_date)
+    ) |>
+    filter(!is.na(site_code), nzchar(site_code)) |>
+    attach_coords(sites)
+}
+
+# Group → one row per site for plotting.
+site_summary <- function(df, count_col = "tag_code") {
+  if (is.null(df) || nrow(df) == 0) {
+    return(tibble(site_code = character(), latitude = numeric(),
+                  longitude = numeric(), site_name = character(),
+                  n = integer(), n_unique = integer()))
+  }
+  df |>
+    filter(!is.na(latitude), !is.na(longitude)) |>
+    group_by(site_code, site_name, latitude, longitude) |>
+    summarise(
+      n        = dplyr::n(),
+      n_unique = dplyr::n_distinct(.data[[count_col]]),
+      .groups  = "drop"
+    )
+}
+
 # ---- UI -----------------------------------------------------
+year_now <- as.integer(format(Sys.Date(), "%Y"))
+
 ui <- page_navbar(
   title  = "Methow Bull Trout Dashboard",
   theme  = bs_theme(version = 5, bootswatch = "flatly"),
@@ -180,47 +248,50 @@ ui <- page_navbar(
     title = "Map",
     layout_sidebar(
       sidebar = sidebar(
-        title = "Filters",
-        width = 300,
-        sliderInput("days_back", "Show detections in last N days:",
-                    min = 7, max = 365, value = 60, step = 1),
-        radioButtons("size_by", "Bubble size:",
-                     choices = c("Detection count" = "count",
-                                 "Unique tags"     = "tags"),
-                     selected = "count"),
-        checkboxInput("show_labels", "Show site labels", FALSE),
+        title = "Map options",
+        width = 320,
+        radioButtons("map_mode", "Mode:",
+                     choices = c("Last detection" = "last",
+                                 "Tagged"         = "tagged",
+                                 "Recapture"      = "recap"),
+                     selected = "last"),
+        hr(),
+        # Common: life stage filter
+        checkboxGroupInput(
+          "stages", "Life stage:",
+          choices  = LIFE_STAGE_LEVELS,
+          selected = c("Adult", "Sub-adult")
+        ),
+        # Mode-specific UI
+        conditionalPanel(
+          "input.map_mode == 'last'",
+          sliderInput("days_back", "Last detection within (days):",
+                      min = 30, max = 730, value = 180, step = 30)
+        ),
+        conditionalPanel(
+          "input.map_mode == 'tagged'",
+          sliderInput("tag_year_range", "Release year range:",
+                      min = 1995, max = year_now,
+                      value = c(year_now - 9, year_now), sep = "")
+        ),
+        conditionalPanel(
+          "input.map_mode == 'recap'",
+          sliderInput("recap_year_range", "Recapture year range:",
+                      min = 1995, max = year_now,
+                      value = c(year_now - 9, year_now), sep = "")
+        ),
         hr(),
         textOutput("map_summary"),
         hr(),
-        helpText("Click a site for details. Uses the Interrogation Summary export.")
+        helpText("Click a circle to see the individual fish at that site.")
       ),
       card(
         full_screen = TRUE,
         leafletOutput("det_map", height = "100%")
-      )
-    )
-  ),
-
-  # ---- Tag lookup tab ---------------------------------------
-  nav_panel(
-    title = "Tag lookup",
-    layout_sidebar(
-      sidebar = sidebar(
-        title = "Find a tag",
-        width = 320,
-        textInput("tag_search", "PIT tag code:",
-                  placeholder = "e.g. 3DD.003D5A1234"),
-        helpText("Partial matches OK (last 4-6 chars)."),
-        hr(),
-        uiOutput("tag_pick")
       ),
-      navset_card_tab(
-        nav_panel("Detection history",
-                  DTOutput("tag_history")),
-        nav_panel("Track map",
-                  leafletOutput("tag_map", height = 500)),
-        nav_panel("Tagging info",
-                  DTOutput("tag_release"))
+      card(
+        card_header(textOutput("detail_header")),
+        DTOutput("detail_table")
       )
     )
   ),
@@ -232,21 +303,18 @@ ui <- page_navbar(
       sidebar = sidebar(
         title = "Wells Dam adult passage",
         width = 280,
-        helpText("Daily adult Bull Trout passage at Wells Dam."),
-        helpText("Source: CBR DART (when wired in)."),
+        helpText("Daily adult Bull Trout passage counts at Wells Dam."),
+        helpText("Source: CBR DART (adult_daily, project=WEL)."),
         sliderInput("wells_year_range", "Year range:",
-                    min = 2010, max = as.integer(format(Sys.Date(), "%Y")),
-                    value = c(as.integer(format(Sys.Date(), "%Y")) - 4,
-                              as.integer(format(Sys.Date(), "%Y"))),
+                    min = 2010, max = year_now,
+                    value = c(year_now - 4, year_now),
                     step = 1, sep = "")
       ),
       card(
         full_screen = TRUE,
         plotlyOutput("wells_plot", height = "100%")
       ),
-      card(
-        DTOutput("wells_table")
-      )
+      card(DTOutput("wells_table"))
     )
   ),
 
@@ -260,22 +328,12 @@ ui <- page_navbar(
     card(
       card_header("How this works"),
       tags$div(
-        tags$p("This dashboard reads CSVs that are pulled daily from PTAGIS by ",
-               "a GitHub Action and committed to the repo:"),
-        tags$ul(
-          tags$li(tags$code("methow_basin_bt_tagging.csv"),
-                  " - Bull Trout tagged in the Methow subbasin"),
-          tags$li(tags$code("wells_dam_bt_tagging.csv"),
-                  " - Bull Trout tagged at Wells Dam"),
-          tags$li(tags$code("upper_columbia_bt_recapture.csv"),
-                  " - Manual recaptures (Twisp weir, etc.)"),
-          tags$li(tags$code("upper_columbia_bt_interrogation.csv"),
-                  " - PIT-array detections")
-        ),
-        tags$p("Site coordinates are pulled from the PTAGIS sites API, ",
-               "cached daily to ", tags$code("config/site_metadata.csv"), "."),
+        tags$p("Daily PTAGIS pulls + Wells Dam DART counts + ",
+               "PTAGIS site metadata committed by a GitHub Action. ",
+               "App reads the latest CSVs at runtime."),
         tags$p("Repo: ",
-               tags$a(href = sprintf("https://github.com/%s/%s", GH_OWNER, GH_REPO),
+               tags$a(href = sprintf("https://github.com/%s/%s",
+                                     GH_OWNER, GH_REPO),
                       sprintf("%s/%s", GH_OWNER, GH_REPO)))
       )
     )
@@ -287,14 +345,161 @@ ui <- page_navbar(
 
 # ---- Server -------------------------------------------------
 server <- function(input, output, session) {
-
-  # Load everything once at startup. Could be wrapped in
-  # reactivePoll later if you want auto-refresh without redeploy.
   raw <- load_all_data()
 
-  # ---- Tidy detections --------------------------------------
-  detections <- reactive({
-    tidy_interrogation(raw$interrogation, sites = raw$sites)
+  # Tidied data per mode
+  last_det_full <- reactive(tidy_last_detection(raw$interrogation,
+                                                raw$sites))
+  tagged_full   <- reactive({
+    bind_rows(
+      tidy_tagging(raw$tagging_methow, raw$sites),
+      tidy_tagging(raw$tagging_wells,  raw$sites)
+    ) |>
+      filter(!is.na(year))
+  })
+  recap_full    <- reactive(tidy_recapture(raw$recapture, raw$sites) |>
+                              filter(!is.na(year)))
+
+  # Filtered for the current mode + UI inputs
+  filtered <- reactive({
+    stages <- input$stages %||% character()
+    if (length(stages) == 0) return(NULL)
+
+    if (input$map_mode == "last") {
+      df <- last_det_full()
+      if (is.null(df) || nrow(df) == 0) return(NULL)
+      cutoff <- Sys.time() - as.difftime(input$days_back, units = "days")
+      df |>
+        filter(life_stage %in% stages,
+               !is.na(last_obs), last_obs >= cutoff)
+    } else if (input$map_mode == "tagged") {
+      df <- tagged_full()
+      if (is.null(df) || nrow(df) == 0) return(NULL)
+      df |>
+        filter(life_stage %in% stages,
+               year >= input$tag_year_range[1],
+               year <= input$tag_year_range[2])
+    } else {
+      df <- recap_full()
+      if (is.null(df) || nrow(df) == 0) return(NULL)
+      df |>
+        filter(life_stage %in% stages,
+               year >= input$recap_year_range[1],
+               year <= input$recap_year_range[2])
+    }
+  })
+
+  # ---- Map summary text -------------------------------------
+  output$map_summary <- renderText({
+    df <- filtered()
+    if (is.null(df) || nrow(df) == 0) return("No data in this filter.")
+    n_total <- nrow(df)
+    n_tags  <- length(unique(df$tag_code))
+    n_sites <- length(unique(df$site_code))
+    label <- switch(input$map_mode,
+                    last   = "tags",
+                    tagged = "releases",
+                    recap  = "recap events")
+    sprintf("%s %s, %s unique tag(s), at %s site(s).",
+            format(n_total, big.mark = ","), label,
+            format(n_tags, big.mark = ","), n_sites)
+  })
+
+  # ---- Map ---------------------------------------------------
+  bubbles <- reactive({
+    df <- filtered()
+    if (is.null(df) || nrow(df) == 0) {
+      return(tibble(site_code = character(), site_name = character(),
+                    latitude = numeric(), longitude = numeric(),
+                    n = integer(), n_unique = integer()))
+    }
+    site_summary(df, count_col = "tag_code")
+  })
+
+  output$det_map <- renderLeaflet({
+    base <- leaflet() |>
+      addProviderTiles(providers$Esri.WorldTopoMap, group = "Topo") |>
+      addProviderTiles(providers$Esri.WorldImagery, group = "Imagery") |>
+      addLayersControl(baseGroups = c("Topo", "Imagery"),
+                       options = layersControlOptions(collapsed = TRUE)) |>
+      setView(lng = -120.0, lat = 48.4, zoom = 9)
+
+    df <- bubbles()
+    if (nrow(df) == 0) return(base)
+
+    # Graduated symbol size from sqrt(n) so a 100-tag site
+    # isn't comically larger than a 1-tag site.
+    radius <- pmax(5, pmin(34, sqrt(df$n) * 3.0))
+
+    base |>
+      addCircleMarkers(
+        data = df,
+        lng = ~longitude, lat = ~latitude,
+        radius = radius,
+        color = "#1f4e79",
+        stroke = TRUE, weight = 1, fillColor = "#3da5ff",
+        fillOpacity = 0.7,
+        layerId = ~site_code,
+        label = ~sprintf("%s (%s) - %d", site_name %||% site_code,
+                          site_code, n),
+        popup = ~sprintf(
+          "<b>%s</b><br/>Code: %s<br/>%s: %d<br/>Unique tags: %d",
+          ifelse(is.na(site_name) | site_name == "", site_code, site_name),
+          site_code,
+          ifelse(input$map_mode == "last", "Detections",
+                 ifelse(input$map_mode == "tagged", "Releases", "Recaps")),
+          n, n_unique)
+      )
+  })
+
+  # Click → detail
+  click_state <- reactiveVal(NULL)
+  observeEvent(input$det_map_marker_click, {
+    click_state(input$det_map_marker_click$id)
+  })
+  # Reset detail when mode changes
+  observe({
+    input$map_mode
+    click_state(NULL)
+  })
+
+  output$detail_header <- renderText({
+    sc <- click_state()
+    if (is.null(sc)) return("Click a site on the map to see fish details.")
+    df <- filtered()
+    name <- if (!is.null(df) && sc %in% df$site_code) {
+      first_name <- df |> filter(site_code == sc) |> pull(site_name)
+      first_name <- first_name[!is.na(first_name) & nzchar(first_name)][1]
+      if (is.na(first_name)) sc else sprintf("%s (%s)", first_name, sc)
+    } else sc
+    sprintf("Detail: %s", name)
+  })
+
+  output$detail_table <- renderDT({
+    sc <- click_state()
+    df <- filtered()
+    if (is.null(sc) || is.null(df)) {
+      return(datatable(data.frame(), rownames = FALSE))
+    }
+    sub <- df |> filter(site_code == sc)
+    cols <- switch(input$map_mode,
+      last   = c("tag_code", "life_stage", "mark_length",
+                 "first_obs", "last_obs", "obs_count",
+                 "release_site", "release_date", "species"),
+      tagged = c("tag_code", "life_stage", "length",
+                 "release_date", "mark_date",
+                 "rear_type", "mark_data_project", "species"),
+      recap  = c("tag_code", "life_stage", "recap_length",
+                 "recap_date", "recap_method",
+                 "mark_site", "mark_date", "species")
+    )
+    sub <- sub |> select(any_of(cols))
+    datatable(
+      sub,
+      options = list(pageLength = 25, scrollX = TRUE,
+                     order = list(list(0, "asc"))),
+      rownames = FALSE
+    )
   })
 
   # ---- Freshness badge --------------------------------------
@@ -306,167 +511,12 @@ server <- function(input, output, session) {
     sprintf("Data updated: %s", format(latest, "%Y-%m-%d %H:%M %Z"))
   })
 
-  # ---- Map summary text -------------------------------------
-  filtered_dets <- reactive({
-    df <- detections()
-    if (is.null(df) || nrow(df) == 0) return(df)
-    cutoff <- Sys.time() - as.difftime(input$days_back, units = "days")
-    df |> filter(!is.na(last_obs), last_obs >= cutoff)
-  })
-
-  output$map_summary <- renderText({
-    df <- filtered_dets()
-    if (is.null(df) || nrow(df) == 0) {
-      return("No detections in this window.")
-    }
-    n_tags  <- length(unique(df$tag_code))
-    n_sites <- length(unique(df$site_code))
-    sprintf("%d unique tags across %d sites in last %d days",
-            n_tags, n_sites, input$days_back)
-  })
-
-  # ---- Map --------------------------------------------------
-  output$det_map <- renderLeaflet({
-    df <- filtered_dets()
-
-    base <- leaflet() |>
-      addProviderTiles(providers$Esri.WorldTopoMap,
-                       group = "Topo") |>
-      addProviderTiles(providers$Esri.WorldImagery,
-                       group = "Imagery") |>
-      addLayersControl(baseGroups = c("Topo", "Imagery"),
-                       options = layersControlOptions(collapsed = TRUE)) |>
-      setView(lng = -120.0, lat = 48.4, zoom = 9)
-
-    if (is.null(df) || nrow(df) == 0) return(base)
-
-    df_geo <- df |>
-      filter(!is.na(latitude), !is.na(longitude)) |>
-      group_by(site_code, site_name, latitude, longitude) |>
-      summarise(
-        n_dets = sum(obs_count, na.rm = TRUE),
-        n_tags = n_distinct(tag_code),
-        last_seen = max(last_obs, na.rm = TRUE),
-        .groups = "drop"
-      )
-
-    if (nrow(df_geo) == 0) return(base)
-
-    size_var <- if (identical(input$size_by, "tags")) df_geo$n_tags
-                else df_geo$n_dets
-    radius   <- pmax(5, pmin(28, sqrt(size_var) * 2.5))
-
-    pal_vals <- as.numeric(difftime(Sys.time(), df_geo$last_seen,
-                                    units = "days"))
-    pal <- colorNumeric(palette = "viridis", domain = pal_vals,
-                        reverse = TRUE)
-
-    m <- base |>
-      addCircleMarkers(
-        data = df_geo,
-        lng  = ~longitude, lat = ~latitude,
-        radius = radius,
-        color = ~pal(pal_vals),
-        stroke = TRUE, weight = 1, fillOpacity = 0.75,
-        label = ~sprintf("%s (%s) - %d tags, %d detections",
-                          site_name, site_code, n_tags, n_dets),
-        popup = ~sprintf(
-          "<b>%s</b><br/>Code: %s<br/>Tags: %d<br/>Detections: %d<br/>Last seen: %s",
-          site_name, site_code, n_tags, n_dets,
-          format(last_seen, "%Y-%m-%d %H:%M"))
-      ) |>
-      addLegend(position = "bottomright", pal = pal, values = pal_vals,
-                title = "Days since<br/>last detection",
-                opacity = 0.9)
-
-    if (isTRUE(input$show_labels)) {
-      m <- m |> addLabelOnlyMarkers(
-        data = df_geo,
-        lng = ~longitude, lat = ~latitude,
-        label = ~site_code,
-        labelOptions = labelOptions(noHide = TRUE, direction = "top",
-                                    textsize = "11px"))
-    }
-    m
-  })
-
-  # ---- Tag lookup -------------------------------------------
-  matched_tags <- reactive({
-    q <- trimws(input$tag_search %||% "")
-    if (!nzchar(q)) return(character())
-    df <- detections()
-    if (is.null(df) || nrow(df) == 0) return(character())
-    hits <- unique(df$tag_code[
-      grepl(q, df$tag_code, fixed = TRUE, ignore.case = TRUE)])
-    head(hits, 50)
-  })
-
-  output$tag_pick <- renderUI({
-    hits <- matched_tags()
-    if (length(hits) == 0) return(helpText("No matches yet."))
-    selectInput("tag_pick", sprintf("Matches (%d):", length(hits)),
-                choices = hits, selected = hits[1])
-  })
-
-  selected_tag <- reactive({
-    input$tag_pick %||% NA_character_
-  })
-
-  output$tag_history <- renderDT({
-    tag <- selected_tag()
-    if (is.na(tag)) return(datatable(data.frame()))
-    df <- detections() |>
-      filter(tag_code == tag) |>
-      arrange(desc(last_obs)) |>
-      select(any_of(c("tag_code", "site_code", "site_name",
-                      "species", "first_obs", "last_obs", "obs_count")))
-    datatable(df, options = list(pageLength = 25, scrollX = TRUE),
-              rownames = FALSE)
-  })
-
-  output$tag_map <- renderLeaflet({
-    tag <- selected_tag()
-    base <- leaflet() |>
-      addProviderTiles(providers$Esri.WorldTopoMap) |>
-      setView(lng = -120.0, lat = 48.4, zoom = 9)
-    if (is.na(tag)) return(base)
-    df <- detections() |>
-      filter(tag_code == tag,
-             !is.na(latitude), !is.na(longitude)) |>
-      arrange(last_obs)
-    if (nrow(df) == 0) return(base)
-    base |>
-      addPolylines(data = df, lng = ~longitude, lat = ~latitude,
-                   weight = 2, opacity = 0.6) |>
-      addCircleMarkers(data = df, lng = ~longitude, lat = ~latitude,
-                       radius = 6, fillOpacity = 0.85, stroke = TRUE,
-                       weight = 1,
-                       label = ~sprintf("%s - %s",
-                                         site_code,
-                                         format(last_obs, "%Y-%m-%d")))
-  })
-
-  output$tag_release <- renderDT({
-    tag <- selected_tag()
-    if (is.na(tag)) return(datatable(data.frame()))
-    rels <- bind_rows(
-      raw$tagging_methow %||% tibble(),
-      raw$tagging_wells  %||% tibble()
-    )
-    if (nrow(rels) == 0) return(datatable(data.frame()))
-    tag_col <- intersect(c("tag_code", "tag", "pit_tag"), names(rels))
-    if (length(tag_col) == 0) return(datatable(data.frame()))
-    rels <- rels[rels[[tag_col[1]]] == tag, , drop = FALSE]
-    datatable(rels, options = list(pageLength = 10, scrollX = TRUE),
-              rownames = FALSE)
-  })
-
   # ---- Wells counts -----------------------------------------
   output$wells_plot <- renderPlotly({
     df <- raw$wells_counts
     if (is.null(df) || nrow(df) == 0) {
       return(plotly_empty(type = "scatter", mode = "lines") |>
-               layout(title = "Wells Dam DART feed not yet wired in"))
+               layout(title = "Wells Dam DART feed not yet available"))
     }
     df <- df |>
       mutate(date = as.Date(date),
@@ -483,7 +533,8 @@ server <- function(input, output, session) {
   output$wells_table <- renderDT({
     df <- raw$wells_counts
     if (is.null(df) || nrow(df) == 0) {
-      return(datatable(data.frame(message = "DART feed not yet wired in.")))
+      return(datatable(data.frame(message = "DART feed not available."),
+                       rownames = FALSE))
     }
     datatable(df |> arrange(desc(date)),
               options = list(pageLength = 15, scrollX = TRUE),
@@ -494,14 +545,12 @@ server <- function(input, output, session) {
   output$last_update_tbl <- renderDT({
     df <- raw$last_update
     if (is.null(df) || nrow(df) == 0) {
-      return(datatable(data.frame(message = "No manifest yet.")))
+      return(datatable(data.frame(message = "No manifest yet."),
+                       rownames = FALSE))
     }
     datatable(df, options = list(pageLength = 10, dom = "t"),
               rownames = FALSE)
   })
 }
-
-# ---- Tiny null-coalescing helper ----------------------------
-`%||%` <- function(a, b) if (is.null(a) || (length(a) == 1 && is.na(a))) b else a
 
 shinyApp(ui, server)

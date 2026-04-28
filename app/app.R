@@ -125,7 +125,14 @@ classify_subbasin <- function(site_code) {
   methow_codes <- c("TWR", "MRC", "MRW", "MRB", "MRT", "LMR",
                     "GLC", "BVC", "WFC", "CWT", "LBT", "LBC",
                     "LOR", "EMC", "HSU", "HSM", "HSL", "MTP",
-                    "LIBBYC", "SGOLDC")
+                    "LIBBYC", "SGOLDC",
+                    # Chewuch arrays + acclimation ponds
+                    "CRW", "CRU", "CML", "CMU",
+                    # Methow side channels & ponds
+                    "18N", "LTP", "MSB", "MEM",
+                    "3D1", "3D2", "3D3", "3D4",
+                    # Spring Creek Acclimation Pond (Methow)
+                    "SCP")
   wells_codes  <- c("WEA", "WEH", "WEHC", "WL1", "WL2", "WLB")
   entiat_codes <- c("ENL", "ENF", "ENA", "ENM", "ENS", "EWC")
   wenatchee_codes <- c("LWE", "UWE", "CHL", "CHU", "WTL", "LWN",
@@ -137,10 +144,25 @@ classify_subbasin <- function(site_code) {
                        "LEAV", "DRY",
                        # Chiwaukum Creek (Wenatchee trib) and
                        # neighbours coded with 3-letter shortforms
-                       "CHW")
+                       "CHW",
+                       # Chiwawa-area arrays + ponds
+                       "ROCK3C", "CCT", "CHIP", "UCT",
+                       # Tyee Channel (TY1..TY4)
+                       "TY1", "TY2", "TY3", "TY4",
+                       # Leavenworth NFH ladder
+                       "LNF",
+                       # East Bank Hatchery (Wenatchee mainstem)
+                       "EBO",
+                       # Tillicum Creek temporary array
+                       "TLT",
+                       # Butcher Creek + Blackbird Pond (per user)
+                       "BCP", "BBP")
   okanogan_codes <- c("OKL")
   cmain_codes    <- c("RIA", "RIS", "RRF", "RRJ", "RREBYP",
-                      "MCN", "BON", "JDA", "TDA")
+                      "MCN", "BON", "JDA", "TDA",
+                      # Foster Creek + Chelan PUD facilities
+                      # (Columbia mainstem near Wells / Chief Joseph)
+                      "FST", "PD2", "CHEL")
 
   dplyr::case_when(
     is.na(s)                                       ~ NA_character_,

@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so rebase can find merge base
 
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
@@ -61,7 +63,9 @@ jobs:
         run: Rscript R/fetch_dart_wells.R
 
       - name: Commit updated data
+        shell: bash
         run: |
+          set +e   # we handle errors manually below
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/ config/site_metadata.csv
@@ -70,17 +74,31 @@ jobs:
             exit 0
           fi
           git commit -m "Daily data pull: $(date -u +'%Y-%m-%d %H:%M UTC')"
-          # Race-tolerant push: if someone pushed while the
-          # workflow was running (e.g. a manual commit), rebase
-          # on top of the new tip and try again.
-          for i in 1 2 3; do
-            if git push; then
+
+          # Race-tolerant push: rebase on origin/main first (in
+          # case a manual commit landed while the workflow was
+          # running), then push. Retry up to 5 times.
+          for i in 1 2 3 4 5; do
+            echo "::group::Sync attempt $i"
+            git fetch origin main
+            git rebase origin/main
+            rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "Rebase failed (rc=$rc); aborting."
+              git rebase --abort 2>/dev/null
+              echo "::endgroup::"
+              exit 1
+            fi
+            git push origin HEAD:main
+            rc=$?
+            if [ $rc -eq 0 ]; then
               echo "Push succeeded on attempt $i."
+              echo "::endgroup::"
               exit 0
             fi
-            echo "Push attempt $i was rejected; rebasing and retrying..."
-            git fetch origin main
-            git rebase origin/main || { git rebase --abort; exit 1; }
+            echo "Push attempt $i failed (rc=$rc); will retry."
+            echo "::endgroup::"
+            sleep 3
           done
-          echo "Push still failing after 3 attempts."
+          echo "Push still failing after 5 attempts."
           exit 1

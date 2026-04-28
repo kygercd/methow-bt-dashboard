@@ -108,6 +108,92 @@ LIFE_STAGE_COLORS <- c(Adult     = "#1f78b4",
                        Juvenile  = "#ff7f00",
                        Unknown   = "#999999")
 
+# ---- Subbasin classifier ------------------------------------
+# Site codes are mapped to one of:
+#   Methow, Wells Dam, Entiat, Wenatchee, Okanogan,
+#   Columbia mainstem, Other.
+# This is a pragmatic prefix-based mapping. Edit the lookup
+# tables below as new sites appear in the data.
+SUBBASIN_ORDER <- c("Methow", "Wells Dam", "Entiat", "Wenatchee",
+                    "Okanogan", "Columbia mainstem", "Other")
+
+classify_subbasin <- function(site_code) {
+  s <- toupper(as.character(site_code))
+  s[is.na(s) | !nzchar(s)] <- NA_character_
+
+  # Explicit code lists (short codes that don't follow a clean prefix).
+  methow_codes <- c("TWR", "MRC", "MRW", "MRB", "MRT", "LMR",
+                    "GLC", "BVC", "WFC", "CWT", "LBT", "LBC",
+                    "LOR", "EMC", "HSU", "HSM", "HSL", "MTP",
+                    "LIBBYC", "SGOLDC")
+  wells_codes  <- c("WEA", "WEH", "WEHC", "WL1", "WL2", "WLB")
+  entiat_codes <- c("ENL", "ENF", "ENA", "ENM", "ENS", "EWC")
+  wenatchee_codes <- c("LWE", "UWE", "CHL", "CHU", "WTL", "LWN",
+                       "MWE", "MWF", "MSH", "MCL",
+                       "TUF", "NAL", "NAU",
+                       "ICL", "ICM", "IC5",
+                       "PEU",
+                       "NAPEEC", "SILVEC", "TILLIC", "ETIENC",
+                       "LEAV", "DRY",
+                       # Chiwaukum Creek (Wenatchee trib) and
+                       # neighbours coded with 3-letter shortforms
+                       "CHW")
+  okanogan_codes <- c("OKL")
+  cmain_codes    <- c("RIA", "RIS", "RRF", "RRJ", "RREBYP",
+                      "MCN", "BON", "JDA", "TDA")
+
+  dplyr::case_when(
+    is.na(s)                                       ~ NA_character_,
+    # Methow + tributaries.
+    # MET prefix catches METHR (Methow R), METTRP (Methow trap),
+    # METRWT (Methow R weir), and any future MET* sites in this
+    # subbasin. This is safe in our data because no non-Methow
+    # PTAGIS site in the upper Columbia uses a MET prefix.
+    stringr::str_starts(s, "MET")                  ~ "Methow",
+    stringr::str_starts(s, "TWISP")                ~ "Methow",
+    stringr::str_starts(s, "TWIT")                 ~ "Methow",
+    stringr::str_starts(s, "CHEW")                 ~ "Methow",
+    stringr::str_starts(s, "GOLD")                 ~ "Methow",
+    stringr::str_starts(s, "BEAV")                 ~ "Methow",
+    stringr::str_starts(s, "WOLF")                 ~ "Methow",
+    stringr::str_starts(s, "FOG")                  ~ "Methow",
+    stringr::str_starts(s, "LOST")                 ~ "Methow",
+    stringr::str_starts(s, "EIGHT")                ~ "Methow",
+    stringr::str_starts(s, "HANS")                 ~ "Methow",
+    stringr::str_starts(s, "CHER")                 ~ "Methow",
+    stringr::str_starts(s, "LBRI")                 ~ "Methow",
+    s %in% methow_codes                            ~ "Methow",
+    # Wells Dam (Columbia mainstem at Wells). Covers WEL,
+    # WELLD1/2, WELTAL, WELFBY, WELH plus the 3-letter ladder
+    # codes WEA/WEH/WL1/WL2 used in the interrogation feed.
+    stringr::str_starts(s, "WEL")                  ~ "Wells Dam",
+    s %in% wells_codes                             ~ "Wells Dam",
+    # Entiat
+    stringr::str_starts(s, "ENT")                  ~ "Entiat",
+    stringr::str_starts(s, "MAD")                  ~ "Entiat",
+    s %in% entiat_codes                            ~ "Entiat",
+    # Wenatchee + tributaries
+    stringr::str_starts(s, "CHIW")                 ~ "Wenatchee",
+    stringr::str_starts(s, "CHIK")                 ~ "Wenatchee",
+    stringr::str_starts(s, "TUM")                  ~ "Wenatchee",
+    stringr::str_starts(s, "NAS")                  ~ "Wenatchee",
+    stringr::str_starts(s, "ICI")                  ~ "Wenatchee",
+    stringr::str_starts(s, "PES")                  ~ "Wenatchee",
+    stringr::str_starts(s, "WEN")                  ~ "Wenatchee",
+    stringr::str_starts(s, "WHIT")                 ~ "Wenatchee",
+    stringr::str_starts(s, "LEAV")                 ~ "Wenatchee",
+    stringr::str_starts(s, "DRY")                  ~ "Wenatchee",
+    s %in% wenatchee_codes                         ~ "Wenatchee",
+    # Okanogan
+    stringr::str_starts(s, "OKA")                  ~ "Okanogan",
+    s %in% okanogan_codes                          ~ "Okanogan",
+    # Other Columbia mainstem dams / bypass arrays
+    s %in% cmain_codes                             ~ "Columbia mainstem",
+    stringr::str_starts(s, "PRD")                  ~ "Columbia mainstem",
+    TRUE                                           ~ "Other"
+  )
+}
+
 # Site coords merge: supplemental wins on conflict.
 build_sites <- function(meta, supp) {
   if (is.null(meta) || nrow(meta) == 0) meta <- tibble(site_code = character())
@@ -320,6 +406,39 @@ ui <- page_navbar(
     )
   ),
 
+  # ---- Migratory Fish tab -----------------------------------
+  nav_panel(
+    title = "Migratory Fish",
+    layout_sidebar(
+      sidebar = sidebar(
+        title = "Migratory filters",
+        width = 320,
+        helpText("Fish detected in 2+ subbasins, OR tagged/",
+                 "detected at Wells Dam with detections at any ",
+                 "non-Wells site (i.e., upstream or downstream)."),
+        checkboxGroupInput(
+          "mig_stages", "Life stage at tagging:",
+          choices  = LIFE_STAGE_LEVELS,
+          selected = c("Adult", "Sub-adult")
+        ),
+        checkboxInput("mig_wells_only",
+                      "Only fish that touched Wells Dam",
+                      value = FALSE),
+        sliderInput("mig_year_range",
+                    "Tagging year range:",
+                    min = 1995, max = year_now,
+                    value = c(1995, year_now),
+                    step = 1, sep = ""),
+        hr(),
+        textOutput("mig_summary")
+      ),
+      card(
+        card_header("Migratory fish (one row per tag)"),
+        DTOutput("mig_table")
+      )
+    )
+  ),
+
   # ---- Wells counts tab -------------------------------------
   nav_panel(
     title = "Wells Dam counts",
@@ -386,8 +505,26 @@ server <- function(input, output, session) {
       distinct(tag_code, mark_date, release_date, site_code, length,
                .keep_all = TRUE)
   })
-  recap_full    <- reactive(tidy_recapture(raw$recapture, raw$sites) |>
-                              filter(!is.na(year)))
+  # Tag -> mark length lookup (built from both tagging files,
+  # one row per tag). Used to attach the original tagging
+  # length onto recapture rows.
+  tag_marklen <- reactive({
+    tag_src <- bind_rows(raw$tagging_methow, raw$tagging_wells)
+    if (is.null(tag_src) || nrow(tag_src) == 0) {
+      return(tibble(tag_code = character(), mark_length = numeric()))
+    }
+    tag_src |>
+      transmute(tag_code   = tag,
+                mark_length = suppressWarnings(as.numeric(length))) |>
+      filter(!is.na(tag_code), nzchar(tag_code)) |>
+      distinct(tag_code, .keep_all = TRUE)
+  })
+
+  recap_full    <- reactive({
+    tidy_recapture(raw$recapture, raw$sites) |>
+      filter(!is.na(year)) |>
+      left_join(tag_marklen(), by = "tag_code")
+  })
 
   # Filtered for the current mode + UI inputs
   filtered <- reactive({
@@ -513,14 +650,12 @@ server <- function(input, output, session) {
     sub <- df |> filter(site_code == sc)
     cols <- switch(input$map_mode,
       last   = c("tag_code", "life_stage", "mark_length",
-                 "first_obs", "last_obs", "obs_count",
-                 "release_site", "release_date", "species"),
+                 "last_obs", "release_site", "release_date"),
       tagged = c("tag_code", "life_stage", "length",
-                 "release_date", "mark_date",
-                 "rear_type", "mark_data_project", "species"),
+                 "release_date"),
       recap  = c("tag_code", "life_stage", "recap_length",
                  "recap_date", "recap_method",
-                 "mark_site", "mark_date", "species")
+                 "mark_site", "mark_date", "mark_length")
     )
     sub <- sub |> select(any_of(cols))
     datatable(
@@ -528,6 +663,196 @@ server <- function(input, output, session) {
       options = list(pageLength = 25, scrollX = TRUE,
                      order = list(list(0, "asc"))),
       rownames = FALSE
+    )
+  })
+
+  # ---- Migratory Fish ---------------------------------------
+  # Build one long table of (tag_code, site_code, event_kind,
+  # event_date) drawn from tagging release/mark, interrogation
+  # detection, and recapture mark/release/recap. Map every
+  # site_code to a subbasin and aggregate per tag.
+  mig_journey <- reactive({
+    pieces <- list()
+
+    add_tag <- function(df, src) {
+      if (is.null(df) || nrow(df) == 0) return(NULL)
+      tibble(
+        tag_code  = df$tag,
+        site_code = extract_site_code(df$release_site),
+        event     = paste0("release_", src),
+        event_dt  = parse_dt(df$release_date)
+      )
+    }
+    add_mark <- function(df, src) {
+      if (is.null(df) || nrow(df) == 0) return(NULL)
+      tibble(
+        tag_code  = df$tag,
+        site_code = extract_site_code(df$mark_site),
+        event     = paste0("mark_", src),
+        event_dt  = parse_dt(df$mark_date)
+      )
+    }
+
+    pieces$rel_methow  <- add_tag (raw$tagging_methow, "methow")
+    pieces$mark_methow <- add_mark(raw$tagging_methow, "methow")
+    pieces$rel_wells   <- add_tag (raw$tagging_wells,  "wells")
+    pieces$mark_wells  <- add_mark(raw$tagging_wells,  "wells")
+
+    if (!is.null(raw$interrogation) && nrow(raw$interrogation) > 0) {
+      pieces$detect <- tibble(
+        tag_code  = raw$interrogation$tag,
+        site_code = extract_site_code(raw$interrogation$site),
+        event     = "detection",
+        event_dt  = parse_dt(raw$interrogation$last_time)
+      )
+    }
+    if (!is.null(raw$recapture) && nrow(raw$recapture) > 0) {
+      pieces$recap_at <- tibble(
+        tag_code  = raw$recapture$tag,
+        site_code = extract_site_code(raw$recapture$recap_site),
+        event     = "recap",
+        event_dt  = parse_dt(raw$recapture$recap_date)
+      )
+      pieces$recap_rel <- tibble(
+        tag_code  = raw$recapture$tag,
+        site_code = extract_site_code(raw$recapture$recap_release_site),
+        event     = "recap_release",
+        event_dt  = parse_dt(raw$recapture$recap_release_date)
+      )
+    }
+
+    j <- bind_rows(pieces) |>
+      filter(!is.na(tag_code), nzchar(tag_code),
+             !is.na(site_code), nzchar(site_code))
+    if (nrow(j) == 0) return(j)
+
+    j |>
+      mutate(subbasin = classify_subbasin(site_code))
+  })
+
+  # One row per tag with summary stats (visited subbasins, sites,
+  # date range, life stage from tagging length).
+  migratory_tbl <- reactive({
+    j <- mig_journey()
+    if (is.null(j) || nrow(j) == 0) {
+      return(tibble(
+        tag_code = character(), life_stage = character(),
+        mark_subbasin = character(), mark_site = character(),
+        mark_date = as.POSIXct(character()),
+        mark_length = numeric(),
+        n_subbasins = integer(), subbasins = character(),
+        n_sites = integer(),
+        first_event = as.POSIXct(character()),
+        last_event  = as.POSIXct(character()),
+        touched_wells = logical()
+      ))
+    }
+
+    # Per-tag tagging info: prefer Methow file row (it carries
+    # the same data, plus everything not in Wells), then Wells.
+    tag_src <- bind_rows(raw$tagging_methow, raw$tagging_wells)
+    if (!is.null(tag_src) && nrow(tag_src) > 0) {
+      tag_info <- tag_src |>
+        transmute(
+          tag_code      = tag,
+          mark_length   = suppressWarnings(as.numeric(length)),
+          mark_date_raw = parse_dt(mark_date),
+          mark_site_raw = extract_site_code(mark_site)
+        ) |>
+        filter(!is.na(tag_code), nzchar(tag_code)) |>
+        distinct(tag_code, .keep_all = TRUE) |>
+        mutate(life_stage    = life_stage(mark_length),
+               mark_subbasin = classify_subbasin(mark_site_raw))
+    } else {
+      tag_info <- tibble(tag_code = character())
+    }
+
+    per_tag <- j |>
+      group_by(tag_code) |>
+      summarise(
+        subbasins   = paste(sort(unique(subbasin)), collapse = ", "),
+        n_subbasins = dplyr::n_distinct(subbasin),
+        n_sites     = dplyr::n_distinct(site_code),
+        first_event = suppressWarnings(min(event_dt, na.rm = TRUE)),
+        last_event  = suppressWarnings(max(event_dt, na.rm = TRUE)),
+        touched_wells = any(subbasin == "Wells Dam"),
+        .groups = "drop"
+      ) |>
+      mutate(
+        first_event = if_else(is.infinite(first_event),
+                              as.POSIXct(NA), first_event),
+        last_event  = if_else(is.infinite(last_event),
+                              as.POSIXct(NA),  last_event)
+      ) |>
+      left_join(tag_info, by = "tag_code")
+
+    # Migratory definition:
+    #   (a) detected/recorded in 2+ subbasins, OR
+    #   (b) touched Wells Dam AND any non-Wells site.
+    # Both reduce to n_subbasins >= 2 (because Wells Dam is
+    # itself a subbasin in our classifier), so this is the
+    # single, unambiguous filter.
+    per_tag |>
+      filter(n_subbasins >= 2) |>
+      arrange(desc(last_event))
+  })
+
+  output$mig_summary <- renderText({
+    df <- migratory_tbl()
+    stages <- input$mig_stages %||% character()
+    if (is.null(df) || nrow(df) == 0) return("No migratory fish.")
+    df <- df |>
+      filter((life_stage %in% stages) | length(stages) == 0,
+             lubridate::year(mark_date_raw) >= input$mig_year_range[1] |
+               is.na(mark_date_raw),
+             lubridate::year(mark_date_raw) <= input$mig_year_range[2] |
+               is.na(mark_date_raw))
+    if (isTRUE(input$mig_wells_only)) df <- df |> filter(touched_wells)
+    sprintf("%s migratory fish, %s subbasin pair(s) represented.",
+            format(nrow(df), big.mark = ","),
+            format(length(unique(df$subbasins)), big.mark = ","))
+  })
+
+  output$mig_table <- renderDT({
+    df <- migratory_tbl()
+    if (is.null(df) || nrow(df) == 0) {
+      return(datatable(data.frame(message = "No migratory fish."),
+                       rownames = FALSE))
+    }
+    stages <- input$mig_stages %||% character()
+    df <- df |>
+      filter(length(stages) == 0 | life_stage %in% stages,
+             is.na(mark_date_raw) |
+               (lubridate::year(mark_date_raw) >= input$mig_year_range[1] &
+                lubridate::year(mark_date_raw) <= input$mig_year_range[2]))
+    if (isTRUE(input$mig_wells_only)) df <- df |> filter(touched_wells)
+
+    out <- df |>
+      transmute(
+        tag_code,
+        life_stage,
+        mark_length,
+        mark_date    = mark_date_raw,
+        mark_site    = mark_site_raw,
+        mark_subbasin,
+        subbasins,
+        n_subbasins,
+        n_sites,
+        first_event,
+        last_event,
+        touched_wells
+      )
+
+    datatable(
+      out,
+      options = list(pageLength = 25, scrollX = TRUE,
+                     order = list(list(10, "desc"))),
+      rownames = FALSE,
+      colnames = c("Tag", "Life stage", "Mark length (mm)",
+                   "Mark date", "Mark site", "Mark subbasin",
+                   "Subbasins visited", "# subbasins",
+                   "# sites", "First event", "Last event",
+                   "Touched Wells Dam?")
     )
   })
 

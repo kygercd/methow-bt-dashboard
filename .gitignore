@@ -17,3 +17,9 @@ Thumbs.db
 # Local-only credentials
 secrets.yml
 *.env
+
+# Cowork / Claude session metadata (not part of the project)
+.claude/
+
+# rsconnect deploy metadata
+app/rsconnect/

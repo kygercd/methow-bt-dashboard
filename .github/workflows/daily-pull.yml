@@ -43,6 +43,7 @@ jobs:
             any::glue
             any::janitor
             any::rprojroot
+            any::tibble
 
       - name: Run PTAGIS fetch
         # PTAGIS scheduled-export files are served without auth, so
@@ -51,14 +52,22 @@ jobs:
         # via env: here - the R script picks them up automatically.
         run: Rscript R/fetch_ptagis.R
 
+      - name: Build site metadata (lat/lon for the map)
+        run: Rscript R/build_site_metadata.R
+
+      - name: Pull Wells Dam DART counts
+        # Currently a no-op placeholder until the DART URL is finalised.
+        # See the script header for how to wire it in.
+        run: Rscript R/fetch_dart_wells.R
+
       - name: Commit updated data
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
+          git add data/ config/site_metadata.csv
           if git diff --cached --quiet; then
             echo "No data changes to commit."
           else
-            git commit -m "Daily PTAGIS pull: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git commit -m "Daily data pull: $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push
           fi

@@ -1,157 +1,149 @@
-# Methow Bull Trout Dashboard — data pipeline
+# Methow Bull Trout Dashboard
 
-Daily pull of PTAGIS data for Bull Trout in the Methow subbasin
-(plus detections at Wells Dam and the Twisp River weir), driven
-by a GitHub Actions cron job. The Shiny app (coming next) reads
-the CSVs in `data/` and displays the current state.
+Live dashboard of PIT-tag data for Bull Trout in the Methow
+subbasin, Wells Dam, and the Twisp River weir, plus Wells Dam
+adult-passage counts. PTAGIS data is refreshed daily by a
+GitHub Action; the Shiny app reads the committed CSVs.
 
 ```
 methow-bt-dashboard/
-├── .github/workflows/daily-pull.yml   # cron → runs R/fetch_ptagis.R
-├── R/fetch_ptagis.R                   # retrieves scheduled PTAGIS exports
-├── config/queries.yml                 # PTAGIS user + export filenames
-├── data/                              # CSVs the app reads (auto-updated)
-│   └── raw/                           # timestamped archive of each pull
-└── DESCRIPTION                        # R deps
+├── .github/workflows/daily-pull.yml   # cron -> R/fetch_*.R
+├── R/
+│   ├── fetch_ptagis.R                 # daily PTAGIS exports
+│   ├── build_site_metadata.R          # PTAGIS sites (lat/lon)
+│   └── fetch_dart_wells.R             # Wells Dam counts (placeholder)
+├── config/
+│   ├── queries.yml                    # PTAGIS user + filenames
+│   └── site_metadata.csv              # auto-generated
+├── data/                              # auto-updated CSVs
+│   └── raw/                           # timestamped archive
+├── app/
+│   ├── app.R                          # Shiny dashboard
+│   └── deploy.R                       # shinyapps.io deploy helper
+└── DESCRIPTION
 ```
 
-## How it works
+## How the data pipeline works
 
-PTAGIS's Advanced Reporting runs on SAP BusinessObjects, which
-does not expose saved queries as direct CSV download URLs. The
-supported pattern is:
+PTAGIS's Advanced Reporting (SAP BusinessObjects) doesn't give
+saved queries a direct CSV download URL. The supported pattern
+is:
 
-1. **On PTAGIS:** save your query, then use *Subscribe To → File*
-   to schedule it to run on a recurring basis and write the result
-   as a CSV to your user's file store.
-2. **PTAGIS serves the file** at a predictable URL:
+1. **On PTAGIS:** save your query, then *Subscribe To -> File*
+   to schedule it to write a CSV to your user's file store on a
+   recurring basis.
+2. **PTAGIS serves the file** at:
    `https://api.ptagis.org/reporting/reports/<user>/file/<filename>.csv`
-3. **Our GitHub Action** hits that URL each morning, saves the CSV
-   into the repo, and commits. The Shiny app reads those CSVs.
+3. **The GitHub Action** hits that URL daily, saves the CSV in
+   the repo, and commits. The Shiny app reads those CSVs.
 
-We never "run" the query from our side — PTAGIS handles the
-refresh on schedule. We just pick up the latest file.
+Site coordinates come from `https://api.ptagis.org/sites/...` and
+are cached daily to `config/site_metadata.csv`. Wells Dam DART
+counts are pulled from CBR (placeholder for now -- see
+`R/fetch_dart_wells.R`).
 
 ## One-time setup
 
-### 1. Build the two saved queries in PTAGIS
+### 1. Build saved queries in PTAGIS
 
 Log into <https://www.ptagis.org/> and open **Advanced Reporting**.
-You'll build two queries and save each one.
+Currently configured queries (already in `config/queries.yml`):
 
-**Query A — Methow Bull Trout tagging**
+- `MethowBasinBullTroutTagging` -- Tagging Details, Bull Trout,
+  Methow subbasin
+- `WellsDamBullTroutTagging` -- Tagging Details, Bull Trout,
+  Wells Dam
+- `Upper Columbia Bull Trout Recapture Detail` -- Recapture
+  Detail, Upper Columbia Bull Trout
+- `Upper Columbia Bull Trout Interrogation Summary` --
+  Interrogation Summary, Upper Columbia Bull Trout
 
-Report type: *Tagging Details* (or *Mark/Recapture Events*). Filters:
+For each query: **Subscribe To -> File**, format **CSV** (single
+file), frequency **Daily** at e.g. 02:00 PT.
 
-- Species → `Bull Trout` (code `3F`)
-- Release Site Subbasin → `Methow` (`17020008`)
+### 2. Edit `config/queries.yml`
 
-Save as something descriptive, e.g. `Methow_BT_Tagging`.
+Set `ptagis_user` to the PTAGIS account that owns the
+subscriptions. Each `filename` must match exactly what PTAGIS
+writes (capitalisation and spaces matter).
 
-**Query B — Methow / Wells / Twisp Bull Trout interrogations**
+### 3. (Optional) PTAGIS credentials
 
-Report type: *Complete Tag History* (preferred — gives every
-detection event for qualifying tags) or *Interrogation Summary*.
-Filters:
+Scheduled-export files are served openly via the API, so no auth
+is needed. If that ever changes, add `PTAGIS_USER` and
+`PTAGIS_PASS` as repo secrets and the script will use them.
 
-- Species → `Bull Trout`
-- Interrogation Site Subbasin → `Methow` **OR** Site code in
-  `WEA` (Wells Dam East ladder), plus any other Wells arrays you
-  care about (`WEH`, `WEJ`, etc.), **OR** `TWR` (Twisp River weir)
+### 4. Push to GitHub and trigger the first run
 
-Save as e.g. `Methow_BT_Interrogations`.
+In **Actions -> Daily PTAGIS pull -> Run workflow**. After it
+succeeds, CSVs appear in `data/` committed by
+`github-actions[bot]`. From then on it runs automatically every
+day at 04:00 PT.
 
-> Double-check Wells Dam site codes against PTAGIS's site list —
-> there are several arrays (adult ladders, juvenile bypass). At
-> minimum you want the adult arrays.
+## Running the app locally
 
-### 2. Schedule each query to export to a file
-
-For each saved query, use **Subscribe To → File**:
-
-- Format: **CSV** (single file — not a zip)
-- Frequency: **Daily**, at a time earlier than your dashboard's
-  refresh (e.g. 02:00 Pacific)
-- Filename: e.g. `Methow_BT_Tagging.csv` and
-  `Methow_BT_Interrogations.csv` — take note of the exact names
-  including capitalization and spaces
-
-### 3. Fill in `config/queries.yml`
-
-Open [config/queries.yml](config/queries.yml) and set:
-
-- `ptagis_user` — your PTAGIS username (the one that owns the
-  scheduled reports)
-- Each `filename` — must match exactly what PTAGIS wrote in step 2
-
-### 4. (Optional) Add PTAGIS credentials as GitHub secrets
-
-If PTAGIS serves your exported files publicly via the API, you
-can skip this. If it challenges for auth, go to the repo's
-**Settings → Secrets and variables → Actions** and add:
-
-- `PTAGIS_USER` — your PTAGIS username
-- `PTAGIS_PASS` — your PTAGIS password
-
-The script picks these up automatically if set.
-
-### 5. Push to GitHub and trigger the first run
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin git@github.com:<you>/methow-bt-dashboard.git
-git push -u origin main
-```
-
-In the repo's **Actions** tab → *Daily PTAGIS pull* → **Run
-workflow**. Watch the log. If it succeeds, two CSVs appear in
-`data/` committed by `github-actions[bot]`. After that it runs
-automatically every day at 04:00 Pacific.
-
-## Running locally
-
-Put any credentials in a `.Renviron` in the project root
-(gitignored):
-
-```
-PTAGIS_USER=yourname
-PTAGIS_PASS=yourpassword
-```
-
-Then from R at the project root:
+From R at the project root:
 
 ```r
-source("R/fetch_ptagis.R")
+# install deps once
+install.packages(c("shiny", "bslib", "dplyr", "tidyr", "readr",
+                   "stringr", "lubridate", "leaflet", "plotly",
+                   "DT", "rprojroot"))
+
+shiny::runApp("app")
 ```
+
+The app loads CSVs from `data/` if they exist locally, otherwise
+falls back to the raw GitHub URLs.
+
+## Deploying to shinyapps.io
+
+### One-time
+
+1. Create a free shinyapps.io account at
+   <https://www.shinyapps.io/>.
+2. **Account -> Tokens -> Show -> Show secret -> Copy to clipboard**.
+   This puts a `rsconnect::setAccountInfo(...)` line on your
+   clipboard.
+3. In R, paste and run that line. You're now authenticated.
+
+### Each deploy
+
+```r
+source("app/deploy.R")
+```
+
+This deploys just `app/app.R`. The app fetches data at runtime
+from the raw GitHub URLs, so you don't need to redeploy when the
+data updates -- the daily Action is enough. Re-deploy only when
+the app code changes.
 
 ## Output files
 
-- `data/<query_name>.csv` — latest snapshot, overwritten on each
-  run. This is what the Shiny app will read.
-- `data/raw/<query_name>_<timestamp>.csv` — archive of each pull
-  (useful for debugging and for detecting when a detection first
-  appeared). Prune periodically if the repo gets large.
-- `data/last_update.csv` — one row per query with row count and
-  fetch timestamp. The app uses this to show "data current as of".
+- `data/<query_name>.csv` -- latest snapshot, overwritten each
+  pull. The Shiny app reads these.
+- `data/raw/<query_name>_<timestamp>.csv` -- archive of each
+  pull. Prune periodically if the repo grows.
+- `data/last_update.csv` -- one row per query with row count and
+  fetch timestamp. The app shows this in the **Data status**
+  tab.
+- `config/site_metadata.csv` -- cached PTAGIS site list with
+  lat/lon for the map.
 
 ## Notes / caveats
 
 - **PTAGIS exports are UTF-16 LE with a BOM** (the SAP
-  BusinessObjects default). The fetch script detects the BOM
-  and re-encodes everything to UTF-8 before saving, so the
-  files in `data/` are friendly UTF-8 CSVs. If you ever run a
-  PTAGIS export by hand and it looks like garbage in Excel /
-  RStudio, that's why — open it with the UTF-16 encoding hint.
+  BusinessObjects default). The fetch script detects the BOM and
+  re-encodes everything to UTF-8 before saving, so CSVs in
+  `data/` are friendly UTF-8.
 - PTAGIS has a reporting lag; "last detection" means "last
-  detection PTAGIS has received and processed". Surface the
-  `last_update.csv` timestamp in the app.
-- The PTAGIS scheduled export determines how fresh the data can
-  be. If PTAGIS runs the export at 02:00 PT and our Action runs
-  at 04:00 PT, we get ~2-hour-old data at best.
-- GitHub Actions is free for public repos and has a generous
-  allowance for private ones — a daily 2-minute pull is nothing.
-- If PTAGIS ever changes their URL format, you just update
-  `config/queries.yml` or `R/fetch_ptagis.R` — no infra changes.
+  detection PTAGIS has received and processed". The app surfaces
+  the `last_update.csv` timestamp.
+- DART feed (`fetch_dart_wells.R`) is a placeholder. To wire it
+  in you'll need to either (a) submit the form once at
+  <https://www.cbr.washington.edu/dart/query/adult_daily> and
+  copy the resulting CSV URL into `DART_URL_TEMPLATE`, or (b)
+  install the `cbrshare` R package and switch to its API. Until
+  then the Wells counts tab shows an empty placeholder.
+- shinyapps.io free tier sleeps inactive apps -- first hit after
+  idle takes a few seconds.

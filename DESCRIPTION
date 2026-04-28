@@ -1,0 +1,16 @@
+Package: methowBtDashboard
+Title: Methow Bull Trout PTAGIS Dashboard
+Version: 0.0.1
+Description: Data pipeline and Shiny dashboard for Bull Trout PIT tag
+    data from PTAGIS for the Methow subbasin, Wells Dam, and the Twisp
+    River weir.
+Imports:
+    httr2,
+    readr,
+    dplyr,
+    yaml,
+    fs,
+    glue,
+    janitor,
+    rprojroot
+Encoding: UTF-8

@@ -1,0 +1,38 @@
+# PTAGIS scheduled report files
+# -------------------------------------------------------------
+# For each saved query that you've set to "Subscribe To -> File"
+# in PTAGIS Advanced Reporting, fill in:
+#   - name:     short filesystem-safe label for our output
+#   - filename: the EXACT filename PTAGIS writes (with extension;
+#               spaces are fine, the script URL-encodes them)
+#
+# PTAGIS serves the file at:
+#   https://api.ptagis.org/reporting/reports/<ptagis_user>/file/<filename>
+# -------------------------------------------------------------
+
+ptagis_user: cdkyger
+
+queries:
+
+  - name: methow_basin_bt_tagging
+    filename: "MethowBasinBullTroutTagging.csv"
+    description: >
+      Tagging Details for Bull Trout released in the Methow
+      subbasin.
+
+  - name: wells_dam_bt_tagging
+    filename: "WellsDamBullTroutTagging.csv"
+    description: >
+      Tagging Details for Bull Trout tagged at Wells Dam.
+
+  - name: upper_columbia_bt_recapture
+    filename: "Upper Columbia Bull Trout Recapture Detail.csv"
+    description: >
+      Recapture Detail for Upper Columbia Bull Trout (covers
+      manual recaptures at sites like Twisp River weir).
+
+  - name: upper_columbia_bt_interrogation
+    filename: "Upper Columbia Bull Trout Interrogation Summary.csv"
+    description: >
+      Interrogation Summary for Upper Columbia Bull Trout
+      (PIT-array detections including Methow sites + Wells Dam).

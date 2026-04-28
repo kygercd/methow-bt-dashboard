@@ -92,6 +92,17 @@ parse_dt <- function(x) {
   out
 }
 
+# Standard date display: MM-DD-YYYY. Used everywhere a date
+# (or datetime - the time component is dropped) is shown in
+# a DT or a label.
+fmt_date <- function(x) {
+  if (is.null(x)) return(character())
+  d <- suppressWarnings(as.Date(x))
+  out <- format(d, "%m-%d-%Y")
+  out[is.na(d)] <- ""
+  out
+}
+
 life_stage <- function(len_mm) {
   len <- suppressWarnings(as.numeric(len_mm))
   dplyr::case_when(
@@ -114,8 +125,21 @@ LIFE_STAGE_COLORS <- c(Adult     = "#1f78b4",
 #   Columbia mainstem, Other.
 # This is a pragmatic prefix-based mapping. Edit the lookup
 # tables below as new sites appear in the data.
-SUBBASIN_ORDER <- c("Methow", "Wells Dam", "Entiat", "Wenatchee",
+SUBBASIN_ORDER <- c("Methow", "Entiat", "Wenatchee",
                     "Okanogan", "Columbia mainstem", "Other")
+
+# True for any PTAGIS site at Wells Dam (ladders, forebay,
+# tailrace, hatchery channel). Used to flag fish that touched
+# Wells Dam even though Wells Dam is grouped with the broader
+# Columbia mainstem subbasin in classify_subbasin().
+WELLS_DAM_CODES <- c("WEL", "WELLD1", "WELLD2", "WELTAL",
+                     "WELFBY", "WELH",
+                     "WEA", "WEH", "WEHC", "WL1", "WL2", "WLB")
+is_wells_site <- function(site_code) {
+  s <- toupper(as.character(site_code))
+  s[is.na(s)] <- ""
+  startsWith(s, "WEL") | s %in% WELLS_DAM_CODES
+}
 
 classify_subbasin <- function(site_code) {
   s <- toupper(as.character(site_code))
@@ -185,11 +209,11 @@ classify_subbasin <- function(site_code) {
     stringr::str_starts(s, "CHER")                 ~ "Methow",
     stringr::str_starts(s, "LBRI")                 ~ "Methow",
     s %in% methow_codes                            ~ "Methow",
-    # Wells Dam (Columbia mainstem at Wells). Covers WEL,
-    # WELLD1/2, WELTAL, WELFBY, WELH plus the 3-letter ladder
-    # codes WEA/WEH/WL1/WL2 used in the interrogation feed.
-    stringr::str_starts(s, "WEL")                  ~ "Wells Dam",
-    s %in% wells_codes                             ~ "Wells Dam",
+    # Wells Dam is part of the Columbia mainstem. is_wells_site()
+    # is the separate predicate used to flag tags that have been
+    # tagged or detected at Wells (see Migratory Fish tab).
+    stringr::str_starts(s, "WEL")                  ~ "Columbia mainstem",
+    s %in% wells_codes                             ~ "Columbia mainstem",
     # Entiat
     stringr::str_starts(s, "ENT")                  ~ "Entiat",
     stringr::str_starts(s, "MAD")                  ~ "Entiat",
@@ -233,12 +257,21 @@ load_all_data <- function() {
   supp <- load_csv("config/site_coords_supplemental.csv")
   sites <- build_sites(meta, supp)
 
+  wells_counts <- load_csv("data/wells_dam_counts.csv")
+  if (!is.null(wells_counts) && nrow(wells_counts) > 0) {
+    # Known DART data error: 2024-10-28 reports 9 fish in
+    # the middle of a long run of zeros. Drop it.
+    wells_counts <- wells_counts |>
+      mutate(date = suppressWarnings(as.Date(date))) |>
+      filter(is.na(date) | date != as.Date("2024-10-28"))
+  }
+
   list(
     tagging_methow      = load_csv("data/methow_basin_bt_tagging.csv"),
     tagging_wells       = load_csv("data/wells_dam_bt_tagging.csv"),
     recapture           = load_csv("data/upper_columbia_bt_recapture.csv"),
     interrogation       = load_csv("data/upper_columbia_bt_interrogation.csv"),
-    wells_counts        = load_csv("data/wells_dam_counts.csv"),
+    wells_counts        = wells_counts,
     last_update         = load_csv("data/last_update.csv"),
     sites               = sites
   )
@@ -435,16 +468,18 @@ ui <- page_navbar(
       sidebar = sidebar(
         title = "Migratory filters",
         width = 320,
-        helpText("Fish detected in 2+ subbasins, OR tagged/",
-                 "detected at Wells Dam with detections at any ",
-                 "non-Wells site (i.e., upstream or downstream)."),
+        helpText("Fish whose journey spans 2+ subbasins ",
+                 "(based on tagging, detection, and recapture ",
+                 "sites). Wells Dam is part of the Columbia ",
+                 "mainstem subbasin; the Wells column flags ",
+                 "any tag actually detected at Wells Dam."),
         checkboxGroupInput(
           "mig_stages", "Life stage at tagging:",
           choices  = LIFE_STAGE_LEVELS,
           selected = c("Adult", "Sub-adult")
         ),
         checkboxInput("mig_wells_only",
-                      "Only fish that touched Wells Dam",
+                      "Only fish detected at Wells Dam",
                       value = FALSE),
         sliderInput("mig_year_range",
                     "Tagging year range:",
@@ -467,19 +502,30 @@ ui <- page_navbar(
     layout_sidebar(
       sidebar = sidebar(
         title = "Wells Dam adult passage",
-        width = 280,
+        width = 300,
         helpText("Daily adult Bull Trout passage counts at Wells Dam."),
         helpText("Source: CBR DART (adult_daily, project=WEL)."),
-        sliderInput("wells_year_range", "Year range:",
+        sliderInput("wells_year_range", "Year range (plots):",
                     min = 2010, max = year_now,
-                    value = c(year_now - 4, year_now),
-                    step = 1, sep = "")
+                    value = c(2010, year_now),
+                    step = 1, sep = ""),
+        hr(),
+        selectInput("wells_table_year", "Table year:",
+                    choices = seq(year_now, 2010),
+                    selected = year_now)
       ),
       card(
-        full_screen = TRUE,
-        plotlyOutput("wells_plot", height = "100%")
+        card_header("Annual totals"),
+        plotlyOutput("wells_annual_plot", height = "100%")
       ),
-      card(DTOutput("wells_table"))
+      card(
+        card_header("Seasonal daily counts (overlay by year)"),
+        plotlyOutput("wells_seasonal_plot", height = "100%")
+      ),
+      card(
+        card_header(textOutput("wells_table_header")),
+        DTOutput("wells_table")
+      )
     )
   ),
 
@@ -680,6 +726,11 @@ server <- function(input, output, session) {
                  "mark_site", "mark_date", "mark_length")
     )
     sub <- sub |> select(any_of(cols))
+    # MM-DD-YYYY display for any date column.
+    date_cols <- intersect(c("last_obs", "release_date",
+                             "mark_date", "recap_date"),
+                           names(sub))
+    for (cc in date_cols) sub[[cc]] <- fmt_date(sub[[cc]])
     datatable(
       sub,
       options = list(pageLength = 25, scrollX = TRUE,
@@ -790,14 +841,15 @@ server <- function(input, output, session) {
     }
 
     per_tag <- j |>
+      mutate(at_wells = is_wells_site(site_code)) |>
       group_by(tag_code) |>
       summarise(
-        subbasins   = paste(sort(unique(subbasin)), collapse = ", "),
-        n_subbasins = dplyr::n_distinct(subbasin),
-        n_sites     = dplyr::n_distinct(site_code),
-        first_event = suppressWarnings(min(event_dt, na.rm = TRUE)),
-        last_event  = suppressWarnings(max(event_dt, na.rm = TRUE)),
-        touched_wells = any(subbasin == "Wells Dam"),
+        subbasins      = paste(sort(unique(subbasin)), collapse = ", "),
+        n_subbasins    = dplyr::n_distinct(subbasin),
+        n_sites        = dplyr::n_distinct(site_code),
+        first_event    = suppressWarnings(min(event_dt, na.rm = TRUE)),
+        last_event     = suppressWarnings(max(event_dt, na.rm = TRUE)),
+        detected_wells = any(at_wells),
         .groups = "drop"
       ) |>
       mutate(
@@ -829,7 +881,7 @@ server <- function(input, output, session) {
                is.na(mark_date_raw),
              lubridate::year(mark_date_raw) <= input$mig_year_range[2] |
                is.na(mark_date_raw))
-    if (isTRUE(input$mig_wells_only)) df <- df |> filter(touched_wells)
+    if (isTRUE(input$mig_wells_only)) df <- df |> filter(detected_wells)
     sprintf("%s migratory fish, %s subbasin pair(s) represented.",
             format(nrow(df), big.mark = ","),
             format(length(unique(df$subbasins)), big.mark = ","))
@@ -847,34 +899,33 @@ server <- function(input, output, session) {
              is.na(mark_date_raw) |
                (lubridate::year(mark_date_raw) >= input$mig_year_range[1] &
                 lubridate::year(mark_date_raw) <= input$mig_year_range[2]))
-    if (isTRUE(input$mig_wells_only)) df <- df |> filter(touched_wells)
+    if (isTRUE(input$mig_wells_only)) df <- df |> filter(detected_wells)
 
     out <- df |>
       transmute(
         tag_code,
         life_stage,
         mark_length,
-        mark_date    = mark_date_raw,
-        mark_site    = mark_site_raw,
+        mark_date     = fmt_date(mark_date_raw),
+        mark_site     = mark_site_raw,
         mark_subbasin,
         subbasins,
         n_subbasins,
         n_sites,
-        first_event,
-        last_event,
-        touched_wells
+        first_event   = fmt_date(first_event),
+        last_event    = fmt_date(last_event),
+        detected_wells
       )
 
     datatable(
       out,
-      options = list(pageLength = 25, scrollX = TRUE,
-                     order = list(list(10, "desc"))),
+      options = list(pageLength = 25, scrollX = TRUE),
       rownames = FALSE,
       colnames = c("Tag", "Life stage", "Mark length (mm)",
                    "Mark date", "Mark site", "Mark subbasin",
                    "Subbasins visited", "# subbasins",
                    "# sites", "First event", "Last event",
-                   "Touched Wells Dam?")
+                   "Detected at Wells Dam")
     )
   })
 
@@ -888,33 +939,103 @@ server <- function(input, output, session) {
   })
 
   # ---- Wells counts -----------------------------------------
-  output$wells_plot <- renderPlotly({
+
+  # Tidy + annotate Wells counts once. Data is already cleaned
+  # (2024-10-28 dropped) by load_all_data().
+  wells_clean <- reactive({
     df <- raw$wells_counts
-    if (is.null(df) || nrow(df) == 0) {
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+    df |>
+      mutate(date  = as.Date(date),
+             count = suppressWarnings(as.numeric(count)),
+             year  = lubridate::year(date),
+             md    = format(date, "%m-%d"),
+             doy   = lubridate::yday(date)) |>
+      filter(!is.na(date), !is.na(count))
+  })
+
+  # Annual totals: bar plot, one bar per year in range.
+  output$wells_annual_plot <- renderPlotly({
+    df <- wells_clean()
+    if (is.null(df)) {
+      return(plotly_empty(type = "bar") |>
+               layout(title = "Wells Dam DART feed not yet available"))
+    }
+    df <- df |>
+      filter(year >= input$wells_year_range[1],
+             year <= input$wells_year_range[2]) |>
+      group_by(year) |>
+      summarise(total = sum(count, na.rm = TRUE), .groups = "drop")
+    plot_ly(df, x = ~year, y = ~total, type = "bar",
+            marker = list(color = "#1f4e79")) |>
+      layout(yaxis = list(title = "Bull Trout (total / year)"),
+             xaxis = list(title = "", dtick = 1),
+             margin = list(l = 60, r = 20, t = 20, b = 40))
+  })
+
+  # Seasonal: x = day-of-year (anchored to 2000 so plotly
+  # shows month tick labels), one line per year, colored.
+  output$wells_seasonal_plot <- renderPlotly({
+    df <- wells_clean()
+    if (is.null(df)) {
       return(plotly_empty(type = "scatter", mode = "lines") |>
                layout(title = "Wells Dam DART feed not yet available"))
     }
     df <- df |>
-      mutate(date = as.Date(date),
-             year = lubridate::year(date)) |>
       filter(year >= input$wells_year_range[1],
-             year <= input$wells_year_range[2])
-    plot_ly(df, x = ~date, y = ~count, color = ~as.factor(year),
+             year <= input$wells_year_range[2]) |>
+      mutate(season_x = as.Date(paste0("2000-", md))) |>
+      arrange(year, season_x)
+    plot_ly(df, x = ~season_x, y = ~count, color = ~as.factor(year),
             type = "scatter", mode = "lines") |>
-      layout(yaxis = list(title = "Adult Bull Trout / day"),
-             xaxis = list(title = ""),
-             legend = list(title = list(text = "Year")))
+      layout(yaxis = list(title = "Bull Trout / day"),
+             xaxis = list(title = "",
+                          tickformat = "%b",
+                          dtick = "M1"),
+             legend = list(title = list(text = "Year")),
+             margin = list(l = 60, r = 20, t = 20, b = 40))
+  })
+
+  # Table: daily counts for the selected year + a 10-year
+  # historical average computed for each calendar day from
+  # the previous 10 years' data. Columns: Date, Count, 10-yr avg.
+  wells_table_data <- reactive({
+    df <- wells_clean()
+    yr <- suppressWarnings(as.integer(input$wells_table_year))
+    if (is.null(df) || is.na(yr)) return(NULL)
+
+    prior <- df |>
+      filter(year < yr, year >= yr - 10) |>
+      group_by(md) |>
+      summarise(avg10 = mean(count, na.rm = TRUE), .groups = "drop")
+
+    df |>
+      filter(year == yr) |>
+      left_join(prior, by = "md") |>
+      arrange(date) |>
+      transmute(
+        Date          = fmt_date(date),
+        Count         = count,
+        `10-yr avg`   = round(avg10, 2)
+      )
+  })
+
+  output$wells_table_header <- renderText({
+    sprintf("Daily counts for %s", input$wells_table_year %||% "")
   })
 
   output$wells_table <- renderDT({
-    df <- raw$wells_counts
+    df <- wells_table_data()
     if (is.null(df) || nrow(df) == 0) {
-      return(datatable(data.frame(message = "DART feed not available."),
+      return(datatable(data.frame(message = "No data for this year."),
                        rownames = FALSE))
     }
-    datatable(df |> arrange(desc(date)),
-              options = list(pageLength = 15, scrollX = TRUE),
-              rownames = FALSE)
+    datatable(
+      df,
+      options = list(pageLength = 15, scrollX = TRUE,
+                     order = list(list(0, "asc"))),
+      rownames = FALSE
+    )
   })
 
   # ---- Data status table ------------------------------------

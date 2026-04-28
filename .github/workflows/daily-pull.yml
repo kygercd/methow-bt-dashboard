@@ -67,7 +67,20 @@ jobs:
           git add data/ config/site_metadata.csv
           if git diff --cached --quiet; then
             echo "No data changes to commit."
-          else
-            git commit -m "Daily data pull: $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+            exit 0
           fi
+          git commit -m "Daily data pull: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          # Race-tolerant push: if someone pushed while the
+          # workflow was running (e.g. a manual commit), rebase
+          # on top of the new tip and try again.
+          for i in 1 2 3; do
+            if git push; then
+              echo "Push succeeded on attempt $i."
+              exit 0
+            fi
+            echo "Push attempt $i was rejected; rebasing and retrying..."
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; exit 1; }
+          done
+          echo "Push still failing after 3 attempts."
+          exit 1

@@ -6,6 +6,7 @@ Description: Data pipeline and Shiny dashboard for Bull Trout PIT tag
     River weir.
 Imports:
     httr2,
+    jsonlite,
     readr,
     dplyr,
     tidyr,

@@ -38,9 +38,15 @@ is:
    the repo, and commits. The Shiny app reads those CSVs.
 
 Site coordinates come from `https://api.ptagis.org/sites/...` and
-are cached daily to `config/site_metadata.csv`. Wells Dam DART
-counts are pulled from CBR (placeholder for now -- see
-`R/fetch_dart_wells.R`).
+are cached daily to `config/site_metadata.csv`. Wells Dam adult
+Bull Trout counts come from CBR DART's Adult Daily Counts CSV
+endpoint (`R/fetch_dart_wells.R`), one GET per year, 2010 through
+the current year. Years with no data yet return an HTML error
+page from DART; the script detects that and skips silently.
+
+A bundled `data/wells_dam_bt_events_history.csv` holds historical
+individual-passage records (ladder side + fish size) for
+reference; the dashboard uses the aggregated daily counts.
 
 ## One-time setup
 
@@ -139,11 +145,9 @@ the app code changes.
 - PTAGIS has a reporting lag; "last detection" means "last
   detection PTAGIS has received and processed". The app surfaces
   the `last_update.csv` timestamp.
-- DART feed (`fetch_dart_wells.R`) is a placeholder. To wire it
-  in you'll need to either (a) submit the form once at
-  <https://www.cbr.washington.edu/dart/query/adult_daily> and
-  copy the resulting CSV URL into `DART_URL_TEMPLATE`, or (b)
-  install the `cbrshare` R package and switch to its API. Until
-  then the Wells counts tab shows an empty placeholder.
+- DART URL pattern for `R/fetch_dart_wells.R`:
+  `https://www.cbr.washington.edu/dart/cs/php/rpt/adult_daily.php?sc=1&outputFormat=csv&proj=WEL&span=no&startdate=1/1&enddate=12/31&run=&avg=1&year=YYYY&syear=YYYY&eyear=YYYY`
+  Replace `proj=WEL` with another project code (e.g., `BON`,
+  `MCN`) to point at a different dam.
 - shinyapps.io free tier sleeps inactive apps -- first hit after
   idle takes a few seconds.

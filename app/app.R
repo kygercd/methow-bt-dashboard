@@ -174,6 +174,13 @@ tidy_last_detection <- function(df, sites) {
 }
 
 # ---- Mode 2: Tagging ----------------------------------------
+# The PTAGIS "Methow Basin" tagging export and the "Wells Dam"
+# tagging export overlap heavily: every Wells-tagged fish is
+# also in the Methow file (Wells sits in the Methow subbasin).
+# A naive bind_rows() therefore double-counts the Wells fish.
+# We distinct() on a tag identity key so each fish-tagging
+# event appears exactly once, regardless of which source file
+# (or files) it came from.
 tidy_tagging <- function(df, sites) {
   if (is.null(df) || nrow(df) == 0) return(NULL)
   tibble(
@@ -192,10 +199,18 @@ tidy_tagging <- function(df, sites) {
       year = lubridate::year(release_date)
     ) |>
     filter(!is.na(site_code), nzchar(site_code)) |>
+    # Defensive de-dup *within* one file. The cross-file de-dup
+    # happens after bind_rows() in the server (see tagged_full).
+    distinct(tag_code, mark_date, release_date, site_code, length,
+             .keep_all = TRUE) |>
     attach_coords(sites)
 }
 
 # ---- Mode 3: Recapture --------------------------------------
+# The recapture export occasionally produces exact duplicate
+# rows (same tag, same recap_date, same recap_site, same length,
+# same capture method) -- presumably from upstream re-imports.
+# Distinct on the recapture-event key collapses these.
 tidy_recapture <- function(df, sites) {
   if (is.null(df) || nrow(df) == 0) return(NULL)
   tibble(
@@ -215,6 +230,8 @@ tidy_recapture <- function(df, sites) {
       year = lubridate::year(recap_date)
     ) |>
     filter(!is.na(site_code), nzchar(site_code)) |>
+    distinct(tag_code, recap_date, site_code, recap_length,
+             recap_method, .keep_all = TRUE) |>
     attach_coords(sites)
 }
 
@@ -285,11 +302,18 @@ ui <- page_navbar(
         hr(),
         helpText("Click a circle to see the individual fish at that site.")
       ),
+      # Give the map ~70% of the vertical space and the detail
+      # table ~30%. fillable=TRUE on page_navbar makes both cards
+      # respect these height hints inside layout_sidebar.
       card(
         full_screen = TRUE,
+        height = "70vh",
+        min_height = "480px",
         leafletOutput("det_map", height = "100%")
       ),
       card(
+        height = "30vh",
+        min_height = "220px",
         card_header(textOutput("detail_header")),
         DTOutput("detail_table")
       )
@@ -355,7 +379,12 @@ server <- function(input, output, session) {
       tidy_tagging(raw$tagging_methow, raw$sites),
       tidy_tagging(raw$tagging_wells,  raw$sites)
     ) |>
-      filter(!is.na(year))
+      filter(!is.na(year)) |>
+      # Wells-tagged fish appear in BOTH the Methow + Wells
+      # exports (Wells sits inside the Methow subbasin).
+      # Collapse to one row per unique tagging event.
+      distinct(tag_code, mark_date, release_date, site_code, length,
+               .keep_all = TRUE)
   })
   recap_full    <- reactive(tidy_recapture(raw$recapture, raw$sites) |>
                               filter(!is.na(year)))

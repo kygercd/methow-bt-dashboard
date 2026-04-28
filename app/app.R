@@ -954,23 +954,49 @@ server <- function(input, output, session) {
       filter(!is.na(date), !is.na(count))
   })
 
-  # Annual totals: bar plot, one bar per year in range.
+  # Annual totals: bar per year, plus a rolling 10-year
+  # average line/marker (each year's value = mean of annual
+  # totals over the previous 10 years).
   output$wells_annual_plot <- renderPlotly({
     df <- wells_clean()
     if (is.null(df)) {
       return(plotly_empty(type = "bar") |>
                layout(title = "Wells Dam DART feed not yet available"))
     }
-    df <- df |>
-      filter(year >= input$wells_year_range[1],
-             year <= input$wells_year_range[2]) |>
+
+    # Annual totals across the FULL series (so the rolling
+    # average can look back 10 years even when the slider's
+    # left edge is later than 2010).
+    annual_all <- df |>
       group_by(year) |>
-      summarise(total = sum(count, na.rm = TRUE), .groups = "drop")
-    plot_ly(df, x = ~year, y = ~total, type = "bar",
-            marker = list(color = "#1f4e79")) |>
+      summarise(total = sum(count, na.rm = TRUE), .groups = "drop") |>
+      arrange(year)
+
+    annual_all <- annual_all |>
+      mutate(avg10 = sapply(year, function(y) {
+        prior <- annual_all$total[annual_all$year >= y - 10 &
+                                    annual_all$year <  y]
+        if (length(prior) == 0) NA_real_ else mean(prior, na.rm = TRUE)
+      }))
+
+    annual <- annual_all |>
+      filter(year >= input$wells_year_range[1],
+             year <= input$wells_year_range[2])
+
+    plot_ly(annual) |>
+      add_bars(x = ~year, y = ~total,
+               name = "Annual total",
+               marker = list(color = "#1f4e79")) |>
+      add_trace(x = ~year, y = ~avg10,
+                type = "scatter", mode = "lines+markers",
+                name = "Prior 10-yr avg",
+                line = list(color = "#d6604d", width = 2),
+                marker = list(color = "#d6604d", size = 7,
+                              symbol = "diamond")) |>
       layout(yaxis = list(title = "Bull Trout (total / year)"),
              xaxis = list(title = "", dtick = 1),
-             margin = list(l = 60, r = 20, t = 20, b = 40))
+             legend = list(orientation = "h", x = 0, y = 1.08),
+             margin = list(l = 60, r = 20, t = 30, b = 40))
   })
 
   # Seasonal: x = day-of-year (anchored to 2000 so plotly
@@ -1010,7 +1036,7 @@ server <- function(input, output, session) {
       summarise(avg10 = mean(count, na.rm = TRUE), .groups = "drop")
 
     df |>
-      filter(year == yr) |>
+      filter(year == yr, count >= 1) |>     # only days with passage
       left_join(prior, by = "md") |>
       arrange(date) |>
       transmute(

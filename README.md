@@ -44,9 +44,14 @@ endpoint (`R/fetch_dart_wells.R`), one GET per year, 2010 through
 the current year. Years with no data yet return an HTML error
 page from DART; the script detects that and skips silently.
 
-A bundled `data/wells_dam_bt_events_history.csv` holds historical
-individual-passage records (ladder side + fish size) for
-reference; the dashboard uses the aggregated daily counts.
+`data/wells_dam_bt_events_history.csv` holds individual-passage
+records (ladder side + fish size) and powers the East vs. West
+Fishway chart. It comes from an internal database report with no
+public API (DART's Wells Dam counts are combined-ladder only), so
+it is **not** part of the nightly GitHub Action — refresh it by
+replacing the file with a new export and committing it manually.
+The app shows the latest date present in this file next to the
+chart so staleness is visible at a glance.
 
 ## One-time setup
 

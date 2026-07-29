@@ -119,6 +119,88 @@ LIFE_STAGE_COLORS <- c(Adult     = "#1f78b4",
                        Juvenile  = "#ff7f00",
                        Unknown   = "#999999")
 
+# ---- Captures/Recaptures tab ---------------------------------
+# Site codes (as returned by extract_site_code()) grouped into the
+# three field locations this tab reports on. WELLD1/WELLD2 are the
+# East/West adult fish ladders at Wells Dam; the generic "WEL"
+# code (used for a handful of recapture records that aren't tied
+# to a specific ladder) is lumped in with the fishways since that's
+# where adult Bull Trout are handled at the dam. WELH is the
+# separate hatchery facility.
+CAPRECAP_SITE_GROUP <- c(
+  TWISPW = "Twisp Weir",
+  WEL    = "Wells Dam Adult Fishways",
+  WELLD1 = "Wells Dam Adult Fishways",
+  WELLD2 = "Wells Dam Adult Fishways",
+  WELH   = "Wells Hatchery"
+)
+CAPRECAP_LOCATIONS <- c("Twisp Weir", "Wells Dam Adult Fishways",
+                        "Wells Hatchery")
+
+# One row per tagging-or-recapture event at a Twisp Weir / Wells
+# Dam Adult Fishway / Wells Hatchery site. Tagging events come from
+# the Methow + Wells Dam PTAGIS tagging exports (site = release
+# site); recapture events come from the recapture export (site =
+# recapture site).
+tidy_capture_events <- function(raw) {
+  target_codes <- names(CAPRECAP_SITE_GROUP)
+
+  tagged <- NULL
+  tag_src <- bind_rows(raw$tagging_methow, raw$tagging_wells)
+  if (!is.null(tag_src) && nrow(tag_src) > 0) {
+    tagged <- tag_src |>
+      mutate(site_code = extract_site_code(release_site)) |>
+      filter(site_code %in% target_codes) |>
+      # Wells-tagged fish appear in both source files; collapse to
+      # one row per tagging event (same key used elsewhere in this
+      # app for the Methow/Wells tagging overlap).
+      distinct(tag, mark_date, release_date, site_code, length,
+               .keep_all = TRUE) |>
+      transmute(
+        tag_code     = tag,
+        event_type   = "Tagged",
+        site_code    = site_code,
+        site_group   = unname(CAPRECAP_SITE_GROUP[site_code]),
+        date         = parse_dt(release_date),
+        length_mm    = suppressWarnings(as.numeric(length)),
+        species      = species_name,
+        rear_type    = rear_type_name,
+        mark_site    = extract_site_code(mark_site),
+        mark_date    = parse_dt(mark_date),
+        recap_method = NA_character_
+      )
+  }
+
+  recaps <- NULL
+  if (!is.null(raw$recapture) && nrow(raw$recapture) > 0) {
+    recaps <- raw$recapture |>
+      mutate(site_code = extract_site_code(recap_site)) |>
+      filter(site_code %in% target_codes) |>
+      distinct(tag, recap_date, site_code, recap_length,
+               recap_capture_method_name, .keep_all = TRUE) |>
+      transmute(
+        tag_code     = tag,
+        event_type   = "Recaptured",
+        site_code    = site_code,
+        site_group   = unname(CAPRECAP_SITE_GROUP[site_code]),
+        date         = parse_dt(recap_date),
+        length_mm    = suppressWarnings(as.numeric(recap_length)),
+        species      = species_name,
+        rear_type    = rear_type_name,
+        mark_site    = extract_site_code(mark_site),
+        mark_date    = parse_dt(mark_date),
+        recap_method = recap_capture_method_name
+      )
+  }
+
+  out <- bind_rows(tagged, recaps)
+  if (is.null(out) || nrow(out) == 0) return(out)
+  out |>
+    filter(!is.na(date)) |>
+    mutate(life_stage = life_stage(length_mm),
+           year       = lubridate::year(date))
+}
+
 # ---- Subbasin classifier ------------------------------------
 # Site codes are mapped to one of:
 #   Methow, Wells Dam, Entiat, Wenatchee, Okanogan,
@@ -266,12 +348,22 @@ load_all_data <- function() {
       filter(is.na(date) | date != as.Date("2024-10-28"))
   }
 
+  # Individual-passage records (ladder side + fish size). The
+  # source file has a one-line report title before the real
+  # header row, hence skip = 1. NOTE: this comes from an internal
+  # database report with no public API (unlike the DART-sourced
+  # wells_counts feed above, DART has no East/West breakdown for
+  # Wells), so it's refreshed manually by the maintainer as new
+  # exports become available rather than by the nightly GH Action.
+  wells_events <- load_csv("data/wells_dam_bt_events_history.csv", skip = 1)
+
   list(
     tagging_methow      = load_csv("data/methow_basin_bt_tagging.csv"),
     tagging_wells       = load_csv("data/wells_dam_bt_tagging.csv"),
     recapture           = load_csv("data/upper_columbia_bt_recapture.csv"),
     interrogation       = load_csv("data/upper_columbia_bt_interrogation.csv"),
     wells_counts        = wells_counts,
+    wells_events        = wells_events,
     last_update         = load_csv("data/last_update.csv"),
     sites               = sites
   )
@@ -393,6 +485,77 @@ site_summary <- function(df, count_col = "tag_code") {
     )
 }
 
+# ---- Movement history builder -------------------------------
+# Returns a tidy table of all known events for one tag in
+# chronological order: mark, tagging release, all interrogation
+# sites, and recaptures.
+build_tag_history <- function(tag, raw_data) {
+  events <- list()
+
+  # Mark + tagging release
+  tag_src <- bind_rows(raw_data$tagging_methow, raw_data$tagging_wells)
+  if (!is.null(tag_src) && nrow(tag_src) > 0) {
+    tag_row <- tag_src |>
+      filter(tag == !!tag) |>
+      distinct(tag, mark_site, mark_date, release_site, release_date,
+               .keep_all = TRUE) |>
+      slice(1)
+    if (nrow(tag_row) > 0) {
+      if (!is.na(parse_dt(tag_row$mark_date[1])) &&
+          !is.na(tag_row$mark_site[1]) && nzchar(tag_row$mark_site[1])) {
+        events$mark <- tibble(
+          event_type = "Mark",
+          site       = as.character(tag_row$mark_site[1]),
+          date       = parse_dt(tag_row$mark_date[1]),
+          length_mm  = suppressWarnings(as.numeric(tag_row$length[1]))
+        )
+      }
+    }
+  }
+
+  # Interrogation detections — one row per site (last detection at
+  # that site is used as the event date so the history is ordered
+  # sensibly when a fish revisits different sites over time).
+  if (!is.null(raw_data$interrogation) && nrow(raw_data$interrogation) > 0) {
+    det <- raw_data$interrogation |> filter(tag == !!tag)
+    if (nrow(det) > 0) {
+      events$detect <- tibble(
+        event_type = "Detection",
+        site       = as.character(det$site),
+        date       = parse_dt(det$last_time),
+        length_mm  = NA_real_
+      )
+    }
+  }
+
+  # Recaptures
+  if (!is.null(raw_data$recapture) && nrow(raw_data$recapture) > 0) {
+    rec <- raw_data$recapture |> filter(tag == !!tag)
+    if (nrow(rec) > 0) {
+      events$recap <- tibble(
+        event_type = "Recapture",
+        site       = as.character(rec$recap_site),
+        date       = parse_dt(rec$recap_date),
+        length_mm  = suppressWarnings(as.numeric(rec$recap_length))
+      )
+    }
+  }
+
+  hist <- bind_rows(events) |>
+    filter(!is.na(date)) |>
+    arrange(date)
+  if (nrow(hist) == 0) return(hist)
+
+  hist |>
+    transmute(
+      Event         = event_type,
+      Site          = site,
+      Date          = fmt_date(date),
+      `Length (mm)` = ifelse(is.na(length_mm), "",
+                             as.character(as.integer(round(length_mm))))
+    )
+}
+
 # ---- UI -----------------------------------------------------
 year_now <- as.integer(format(Sys.Date(), "%Y"))
 
@@ -441,7 +604,8 @@ ui <- page_navbar(
         hr(),
         textOutput("map_summary"),
         hr(),
-        helpText("Click a circle to see the individual fish at that site.")
+        helpText("Click a circle to see the individual fish at that site.",
+                 "Click a row in the detail table to see that fish's full movement history.")
       ),
       # Give the map ~70% of the vertical space and the detail
       # table ~30%. fillable=TRUE on page_navbar makes both cards
@@ -486,12 +650,48 @@ ui <- page_navbar(
                     min = 1995, max = year_now,
                     value = c(1995, year_now),
                     step = 1, sep = ""),
+        helpText("Click a row in the table to see that fish's full movement history."),
         hr(),
         textOutput("mig_summary")
       ),
       card(
         card_header("Migratory fish (one row per tag)"),
         DTOutput("mig_table")
+      )
+    )
+  ),
+
+  # ---- Captures/Recaptures tab -------------------------------
+  nav_panel(
+    title = "Captures/Recaptures",
+    layout_sidebar(
+      sidebar = sidebar(
+        title = "Filters",
+        width = 320,
+        helpText("Bull Trout tagged or recaptured at the Twisp ",
+                 "Weir, Wells Dam Adult Fishways, or Wells ",
+                 "Hatchery."),
+        checkboxGroupInput(
+          "caprecap_locations", "Location:",
+          choices  = CAPRECAP_LOCATIONS,
+          selected = CAPRECAP_LOCATIONS
+        ),
+        checkboxGroupInput(
+          "caprecap_event", "Event type:",
+          choices  = c("Tagged", "Recaptured"),
+          selected = c("Tagged", "Recaptured")
+        ),
+        sliderInput("caprecap_year_range", "Year(s):",
+                    min = 1995, max = year_now,
+                    value = c(year_now, year_now),
+                    step = 1, sep = ""),
+        helpText("Click a row in the table to see that fish's full movement history."),
+        hr(),
+        textOutput("caprecap_summary")
+      ),
+      card(
+        card_header("Captures / Recaptures (one row per event)"),
+        DTOutput("caprecap_table")
       )
     )
   ),
@@ -517,6 +717,10 @@ ui <- page_navbar(
       card(
         card_header("Annual totals"),
         plotlyOutput("wells_annual_plot", height = "100%")
+      ),
+      card(
+        card_header(textOutput("wells_ladder_header")),
+        plotlyOutput("wells_ladder_plot", height = "100%")
       ),
       card(
         card_header("Seasonal daily counts (overlay by year)"),
@@ -594,6 +798,57 @@ server <- function(input, output, session) {
       left_join(tag_marklen(), by = "tag_code")
   })
 
+  # ---- Movement history support --------------------------------
+  # Tag whose history modal is currently being shown.
+  selected_tag <- reactiveVal(NULL)
+
+  # Subset of filtered() displayed in the detail table (kept as a
+  # reactive so the row-click observer can map row index → tag_code
+  # without re-running the filter).
+  detail_data_r <- reactive({
+    sc <- click_state()
+    df <- filtered()
+    if (is.null(sc) || is.null(df) || nrow(df) == 0) return(NULL)
+    sub <- df |> filter(site_code == sc)
+    cols <- switch(input$map_mode,
+      last   = c("tag_code", "life_stage", "mark_length",
+                 "last_obs", "release_site", "release_date"),
+      tagged = c("tag_code", "life_stage", "length", "release_date"),
+      recap  = c("tag_code", "life_stage", "recap_length",
+                 "recap_date", "recap_method",
+                 "mark_site", "mark_date", "mark_length")
+    )
+    sub |> select(any_of(cols))
+  })
+
+  # Filtered migratory table (extracted from renderDT so the row-
+  # click observer can reference it without duplicating filter logic).
+  mig_data_r <- reactive({
+    df <- migratory_tbl()
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+    stages <- input$mig_stages %||% character()
+    df <- df |>
+      filter(length(stages) == 0 | life_stage %in% stages,
+             is.na(mark_date_raw) |
+               (lubridate::year(mark_date_raw) >= input$mig_year_range[1] &
+                lubridate::year(mark_date_raw) <= input$mig_year_range[2]))
+    if (isTRUE(input$mig_wells_only)) df <- df |> filter(detected_wells)
+    df
+  })
+
+  # History table rendered inside the modal.
+  output$history_table <- renderDT({
+    tag <- selected_tag()
+    if (is.null(tag)) return(datatable(data.frame(), rownames = FALSE))
+    hist <- build_tag_history(tag, raw)
+    if (nrow(hist) == 0) {
+      return(datatable(data.frame(message = "No history found for this tag."),
+                       rownames = FALSE))
+    }
+    datatable(hist, rownames = FALSE,
+              options = list(pageLength = 100, dom = "t", scrollX = TRUE))
+  })
+
   # Filtered for the current mode + UI inputs
   filtered <- reactive({
     stages <- input$stages %||% character()
@@ -603,9 +858,15 @@ server <- function(input, output, session) {
       df <- last_det_full()
       if (is.null(df) || nrow(df) == 0) return(NULL)
       cutoff <- Sys.time() - as.difftime(input$days_back, units = "days")
+      # Keep only each fish's single most-recent detection site so the
+      # map shows where each fish was last seen, not every site it ever
+      # visited within the window.
       df |>
         filter(life_stage %in% stages,
-               !is.na(last_obs), last_obs >= cutoff)
+               !is.na(last_obs), last_obs >= cutoff) |>
+        group_by(tag_code) |>
+        slice_max(last_obs, n = 1, with_ties = FALSE) |>
+        ungroup()
     } else if (input$map_mode == "tagged") {
       df <- tagged_full()
       if (is.null(df) || nrow(df) == 0) return(NULL)
@@ -710,22 +971,10 @@ server <- function(input, output, session) {
   })
 
   output$detail_table <- renderDT({
-    sc <- click_state()
-    df <- filtered()
-    if (is.null(sc) || is.null(df)) {
-      return(datatable(data.frame(), rownames = FALSE))
+    sub <- detail_data_r()
+    if (is.null(sub) || nrow(sub) == 0) {
+      return(datatable(data.frame(), rownames = FALSE, selection = "single"))
     }
-    sub <- df |> filter(site_code == sc)
-    cols <- switch(input$map_mode,
-      last   = c("tag_code", "life_stage", "mark_length",
-                 "last_obs", "release_site", "release_date"),
-      tagged = c("tag_code", "life_stage", "length",
-                 "release_date"),
-      recap  = c("tag_code", "life_stage", "recap_length",
-                 "recap_date", "recap_method",
-                 "mark_site", "mark_date", "mark_length")
-    )
-    sub <- sub |> select(any_of(cols))
     # MM-DD-YYYY display for any date column.
     date_cols <- intersect(c("last_obs", "release_date",
                              "mark_date", "recap_date"),
@@ -733,10 +982,28 @@ server <- function(input, output, session) {
     for (cc in date_cols) sub[[cc]] <- fmt_date(sub[[cc]])
     datatable(
       sub,
+      selection = "single",
       options = list(pageLength = 25, scrollX = TRUE,
                      order = list(list(0, "asc"))),
       rownames = FALSE
     )
+  })
+
+  # Row click in the detail table → movement history modal.
+  observeEvent(input$detail_table_rows_selected, {
+    sel <- input$detail_table_rows_selected
+    sub <- detail_data_r()
+    if (is.null(sel) || is.null(sub) || nrow(sub) == 0) return()
+    tag <- sub$tag_code[sel]
+    if (is.null(tag) || is.na(tag) || !nzchar(tag)) return()
+    selected_tag(tag)
+    showModal(modalDialog(
+      title = paste("Movement history:", tag),
+      DTOutput("history_table"),
+      easyClose = TRUE,
+      footer = modalButton("Close"),
+      size = "l"
+    ))
   })
 
   # ---- Migratory Fish ---------------------------------------
@@ -872,34 +1139,19 @@ server <- function(input, output, session) {
   })
 
   output$mig_summary <- renderText({
-    df <- migratory_tbl()
-    stages <- input$mig_stages %||% character()
+    df <- mig_data_r()
     if (is.null(df) || nrow(df) == 0) return("No migratory fish.")
-    df <- df |>
-      filter((life_stage %in% stages) | length(stages) == 0,
-             lubridate::year(mark_date_raw) >= input$mig_year_range[1] |
-               is.na(mark_date_raw),
-             lubridate::year(mark_date_raw) <= input$mig_year_range[2] |
-               is.na(mark_date_raw))
-    if (isTRUE(input$mig_wells_only)) df <- df |> filter(detected_wells)
     sprintf("%s migratory fish, %s subbasin pair(s) represented.",
             format(nrow(df), big.mark = ","),
             format(length(unique(df$subbasins)), big.mark = ","))
   })
 
   output$mig_table <- renderDT({
-    df <- migratory_tbl()
+    df <- mig_data_r()
     if (is.null(df) || nrow(df) == 0) {
       return(datatable(data.frame(message = "No migratory fish."),
-                       rownames = FALSE))
+                       rownames = FALSE, selection = "single"))
     }
-    stages <- input$mig_stages %||% character()
-    df <- df |>
-      filter(length(stages) == 0 | life_stage %in% stages,
-             is.na(mark_date_raw) |
-               (lubridate::year(mark_date_raw) >= input$mig_year_range[1] &
-                lubridate::year(mark_date_raw) <= input$mig_year_range[2]))
-    if (isTRUE(input$mig_wells_only)) df <- df |> filter(detected_wells)
 
     out <- df |>
       transmute(
@@ -919,6 +1171,7 @@ server <- function(input, output, session) {
 
     datatable(
       out,
+      selection = "single",
       options = list(pageLength = 25, scrollX = TRUE),
       rownames = FALSE,
       colnames = c("Tag", "Life stage", "Mark length (mm)",
@@ -927,6 +1180,99 @@ server <- function(input, output, session) {
                    "# sites", "First event", "Last event",
                    "Detected at Wells Dam")
     )
+  })
+
+  # Row click in the migratory table → movement history modal.
+  observeEvent(input$mig_table_rows_selected, {
+    sel <- input$mig_table_rows_selected
+    df  <- mig_data_r()
+    if (is.null(sel) || is.null(df) || nrow(df) == 0) return()
+    tag <- df$tag_code[sel]
+    if (is.null(tag) || is.na(tag) || !nzchar(tag)) return()
+    selected_tag(tag)
+    showModal(modalDialog(
+      title = paste("Movement history:", tag),
+      DTOutput("history_table"),
+      easyClose = TRUE,
+      footer = modalButton("Close"),
+      size = "l"
+    ))
+  })
+
+  # ---- Captures/Recaptures -----------------------------------
+  caprecap_full <- reactive(tidy_capture_events(raw))
+
+  caprecap_data_r <- reactive({
+    df <- caprecap_full()
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+    locs   <- input$caprecap_locations %||% character()
+    events <- input$caprecap_event %||% character()
+    if (length(locs) == 0 || length(events) == 0) return(NULL)
+    df |>
+      filter(site_group %in% locs,
+             event_type %in% events,
+             year >= input$caprecap_year_range[1],
+             year <= input$caprecap_year_range[2]) |>
+      arrange(desc(date))
+  })
+
+  output$caprecap_summary <- renderText({
+    df <- caprecap_data_r()
+    if (is.null(df) || nrow(df) == 0) return("No data in this filter.")
+    n_total <- nrow(df)
+    n_tags  <- length(unique(df$tag_code))
+    sprintf("%s event(s), %s unique tag(s).",
+            format(n_total, big.mark = ","),
+            format(n_tags, big.mark = ","))
+  })
+
+  output$caprecap_table <- renderDT({
+    df <- caprecap_data_r()
+    if (is.null(df) || nrow(df) == 0) {
+      return(datatable(data.frame(message = "No data for this filter."),
+                       rownames = FALSE, selection = "single"))
+    }
+    out <- df |>
+      transmute(
+        tag_code,
+        event_type,
+        location    = site_group,
+        date        = fmt_date(date),
+        length_mm,
+        life_stage,
+        species,
+        rear_type,
+        mark_site,
+        mark_date   = fmt_date(mark_date),
+        recap_method = ifelse(is.na(recap_method), "", recap_method)
+      )
+    datatable(
+      out,
+      selection = "single",
+      options = list(pageLength = 25, scrollX = TRUE,
+                     order = list(list(3, "desc"))),
+      rownames = FALSE,
+      colnames = c("Tag", "Event", "Location", "Date",
+                   "Length (mm)", "Life stage", "Species", "Rear type",
+                   "Mark site", "Mark date", "Recapture method")
+    )
+  })
+
+  # Row click in the captures/recaptures table -> movement history modal.
+  observeEvent(input$caprecap_table_rows_selected, {
+    sel <- input$caprecap_table_rows_selected
+    df  <- caprecap_data_r()
+    if (is.null(sel) || is.null(df) || nrow(df) == 0) return()
+    tag <- df$tag_code[sel]
+    if (is.null(tag) || is.na(tag) || !nzchar(tag)) return()
+    selected_tag(tag)
+    showModal(modalDialog(
+      title = paste("Movement history:", tag),
+      DTOutput("history_table"),
+      easyClose = TRUE,
+      footer = modalButton("Close"),
+      size = "l"
+    ))
   })
 
   # ---- Freshness badge --------------------------------------
@@ -994,6 +1340,61 @@ server <- function(input, output, session) {
                 marker = list(color = "#d6604d", size = 7,
                               symbol = "diamond")) |>
       layout(yaxis = list(title = "Bull Trout (total / year)"),
+             xaxis = list(title = "", dtick = 1),
+             legend = list(orientation = "h", x = 0, y = 1.08),
+             margin = list(l = 60, r = 20, t = 30, b = 40))
+  })
+
+  # Ladder-side breakdown (East vs. West fishway), from the
+  # individual-passage events file. Tidy once: parse the date,
+  # normalize the ladder label, derive year.
+  wells_events_clean <- reactive({
+    df <- raw$wells_events
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+    df |>
+      transmute(
+        date     = as.Date(parse_dt(Date)),
+        location = dplyr::case_when(
+          grepl("East", Location, ignore.case = TRUE) ~ "East Fishway",
+          grepl("West", Location, ignore.case = TRUE) ~ "West Fishway",
+          TRUE ~ Location
+        )
+      ) |>
+      filter(!is.na(date)) |>
+      mutate(year = lubridate::year(date))
+  })
+
+  # This data comes from a manually-refreshed internal report (no
+  # public API), so surface how current it is directly in the UI
+  # rather than only in code comments.
+  output$wells_ladder_header <- renderText({
+    df <- wells_events_clean()
+    if (is.null(df) || nrow(df) == 0) {
+      return("East vs. West Fishway (annual passage events)")
+    }
+    sprintf("East vs. West Fishway (annual passage events) — data through %s",
+            fmt_date(max(df$date, na.rm = TRUE)))
+  })
+
+  # Annual passage-event counts per ladder, bounded by the same
+  # year-range slider used for the other Wells Dam plots.
+  output$wells_ladder_plot <- renderPlotly({
+    df <- wells_events_clean()
+    if (is.null(df) || nrow(df) == 0) {
+      return(plotly_empty(type = "bar") |>
+               layout(title = "Wells Dam ladder-side passage data not yet available"))
+    }
+    summ <- df |>
+      filter(year >= input$wells_year_range[1],
+             year <= input$wells_year_range[2]) |>
+      count(year, location, name = "n")
+
+    plot_ly(summ, x = ~year, y = ~n, color = ~location,
+            colors = c("East Fishway" = "#1f4e79",
+                       "West Fishway" = "#3da5ff"),
+            type = "bar", text = ~n, textposition = "outside") |>
+      layout(barmode = "group",
+             yaxis = list(title = "Bull Trout passage events / year"),
              xaxis = list(title = "", dtick = 1),
              legend = list(orientation = "h", x = 0, y = 1.08),
              margin = list(l = 60, r = 20, t = 30, b = 40))

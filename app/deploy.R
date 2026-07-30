@@ -28,7 +28,7 @@ rsconnect::deployApp(
   appDir         = app_dir,
   appFiles       = app_files,
   appName        = "methow-bt-dashboard",
-  appTitle       = "Methow Bull Trout Dashboard",
+  appTitle       = "Bull Trout Dashboard",
   forceUpdate    = TRUE,
   launch.browser = TRUE
 )

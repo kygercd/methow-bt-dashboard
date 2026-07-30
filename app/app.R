@@ -1,6 +1,6 @@
 # app.R
 # -------------------------------------------------------------
-# Methow Bull Trout Dashboard - Shiny app
+# Bull Trout Dashboard - Shiny app
 #
 # Reads CSVs pulled daily by R/fetch_ptagis.R, R/fetch_dart_wells.R,
 # and R/build_site_metadata.R. When run locally it loads from
@@ -121,21 +121,61 @@ LIFE_STAGE_COLORS <- c(Adult     = "#1f78b4",
 
 # ---- Captures/Recaptures tab ---------------------------------
 # Site codes (as returned by extract_site_code()) grouped into the
-# three field locations this tab reports on. WELLD1/WELLD2 are the
+# four field locations this tab reports on. WELLD1/WELLD2 are the
 # East/West adult fish ladders at Wells Dam; the generic "WEL"
 # code (used for a handful of recapture records that aren't tied
 # to a specific ladder) is lumped in with the fishways since that's
 # where adult Bull Trout are handled at the dam. WELH is the
-# separate hatchery facility.
+# separate hatchery facility. METH (Methow Hatchery) has no Bull
+# Trout tagging/recapture records as of this writing, but is
+# included so it appears (with a zero count) if that changes.
 CAPRECAP_SITE_GROUP <- c(
   TWISPW = "Twisp Weir",
   WEL    = "Wells Dam Adult Fishways",
   WELLD1 = "Wells Dam Adult Fishways",
   WELLD2 = "Wells Dam Adult Fishways",
-  WELH   = "Wells Hatchery"
+  WELH   = "Wells Hatchery",
+  METH   = "Methow Hatchery"
 )
 CAPRECAP_LOCATIONS <- c("Twisp Weir", "Wells Dam Adult Fishways",
-                        "Wells Hatchery")
+                        "Wells Hatchery", "Methow Hatchery")
+CAPRECAP_LOCATION_COLORS <- c(
+  "Twisp Weir"               = "#2a78d6",
+  "Wells Dam Adult Fishways" = "#eb6834",
+  "Wells Hatchery"           = "#1baf7a",
+  "Methow Hatchery"          = "#4a3aa7"
+)
+
+# A fish tagged and then recorded as "recaptured" at the same
+# location shortly after is almost always the same handling event
+# showing up in both the tagging and recapture PTAGIS exports, not
+# a genuine second encounter. Recaptures within this many days of
+# that fish's tagging at the same location are dropped so they
+# aren't double-counted. Genuine later recaptures (the whole point
+# of a mark-recapture study) are unaffected.
+CAPRECAP_DEDUPE_DAYS <- 21
+
+# Drops a "Recaptured" row when it immediately follows (in time,
+# within the same tag + location) a "Tagged" row within
+# CAPRECAP_DEDUPE_DAYS. Only collapses that specific Tagged ->
+# Recaptured adjacency; separate later recaptures of the same fish
+# at the same location are left alone.
+dedupe_capture_events <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(df)
+  df |>
+    arrange(tag_code, site_group, date) |>
+    group_by(tag_code, site_group) |>
+    mutate(
+      gap_days  = as.numeric(difftime(date, dplyr::lag(date), units = "days")),
+      prev_type = dplyr::lag(event_type),
+      drop      = event_type == "Recaptured" &
+                  prev_type == "Tagged" &
+                  !is.na(gap_days) & gap_days <= CAPRECAP_DEDUPE_DAYS
+    ) |>
+    ungroup() |>
+    filter(!drop) |>
+    select(-gap_days, -prev_type, -drop)
+}
 
 # One row per tagging-or-recapture event at a Twisp Weir / Wells
 # Dam Adult Fishway / Wells Hatchery site. Tagging events come from
@@ -198,7 +238,8 @@ tidy_capture_events <- function(raw) {
   out |>
     filter(!is.na(date)) |>
     mutate(life_stage = life_stage(length_mm),
-           year       = lubridate::year(date))
+           year       = lubridate::year(date)) |>
+    dedupe_capture_events()
 }
 
 # ---- Subbasin classifier ------------------------------------
@@ -560,7 +601,7 @@ build_tag_history <- function(tag, raw_data) {
 year_now <- as.integer(format(Sys.Date(), "%Y"))
 
 ui <- page_navbar(
-  title  = "Methow Bull Trout Dashboard",
+  title  = "Bull Trout Dashboard",
   theme  = bs_theme(version = 5, bootswatch = "flatly"),
   fillable = TRUE,
 
@@ -669,8 +710,8 @@ ui <- page_navbar(
         title = "Filters",
         width = 320,
         helpText("Bull Trout tagged or recaptured at the Twisp ",
-                 "Weir, Wells Dam Adult Fishways, or Wells ",
-                 "Hatchery."),
+                 "Weir, Wells Dam Adult Fishways, Wells ",
+                 "Hatchery, or Methow Hatchery."),
         checkboxGroupInput(
           "caprecap_locations", "Location:",
           choices  = CAPRECAP_LOCATIONS,
@@ -685,9 +726,21 @@ ui <- page_navbar(
                     min = 1995, max = year_now,
                     value = c(year_now, year_now),
                     step = 1, sep = ""),
+        helpText("Drag the slider's left edge back to compare against ",
+                 "previous years."),
+        helpText("A recapture recorded within ", CAPRECAP_DEDUPE_DAYS,
+                 " days of that same fish's tagging at the same ",
+                 "location is treated as one event, not two."),
         helpText("Click a row in the table to see that fish's full movement history."),
         hr(),
         textOutput("caprecap_summary")
+      ),
+      card(
+        full_screen = TRUE,
+        height = "35vh",
+        min_height = "260px",
+        card_header("Fish captured / recaptured per year"),
+        plotlyOutput("caprecap_plot", height = "100%")
       ),
       card(
         card_header("Captures / Recaptures (one row per event)"),
@@ -1224,6 +1277,32 @@ server <- function(input, output, session) {
     sprintf("%s event(s), %s unique tag(s).",
             format(n_total, big.mark = ","),
             format(n_tags, big.mark = ","))
+  })
+
+  # Annual count per location, grouped bars. Uses the same filtered
+  # data as the table so location/event-type/year selections stay
+  # in sync between the chart and the rows below it.
+  output$caprecap_plot <- renderPlotly({
+    df <- caprecap_data_r()
+    if (is.null(df) || nrow(df) == 0) {
+      return(plotly_empty(type = "bar") |>
+               layout(title = "No data for this filter"))
+    }
+    locs <- input$caprecap_locations %||% character()
+    yrs  <- seq(input$caprecap_year_range[1], input$caprecap_year_range[2])
+
+    summ <- df |>
+      count(year, location = site_group, name = "n") |>
+      tidyr::complete(year = yrs, location = locs, fill = list(n = 0))
+
+    plot_ly(summ, x = ~year, y = ~n, color = ~location,
+            colors = CAPRECAP_LOCATION_COLORS,
+            type = "bar", text = ~n, textposition = "outside") |>
+      layout(barmode = "group",
+             yaxis = list(title = "Fish captured / recaptured"),
+             xaxis = list(title = "", dtick = 1),
+             legend = list(orientation = "h", x = 0, y = 1.08),
+             margin = list(l = 60, r = 20, t = 30, b = 40))
   })
 
   output$caprecap_table <- renderDT({

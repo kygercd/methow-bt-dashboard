@@ -75,7 +75,12 @@ load_csv <- function(rel_path, ...) {
 # Site columns are formatted "CODE - Description". Extract code.
 extract_site_code <- function(x) {
   if (is.null(x)) return(character())
-  trimws(stringr::str_extract(as.character(x), "^[^ ]+"))
+  code <- trimws(stringr::str_extract(as.character(x), "^[^ ]+"))
+  # PTAGIS records an unrecorded site as "- Unknown", which parses
+  # down to a bare "-". That's not a real site, so treat it as
+  # missing rather than letting it fall into the "Other" subbasin.
+  code[code == "-"] <- NA_character_
+  code
 }
 
 # PTAGIS: dates as "MM/DD/YYYY" or "MM/DD/YYYY HH:MM:SS [AM/PM]".
@@ -269,7 +274,7 @@ classify_subbasin <- function(site_code) {
   s[is.na(s) | !nzchar(s)] <- NA_character_
 
   # Explicit code lists (short codes that don't follow a clean prefix).
-  methow_codes <- c("TWR", "MRC", "MRW", "MRB", "MRT", "LMR",
+  methow_codes <- c("TWR", "MRC", "MRW", "MRB", "MRT", "MRU", "LMR",
                     "GLC", "BVC", "WFC", "CWT", "LBT", "LBC",
                     "LOR", "EMC", "HSU", "HSM", "HSL", "MTP",
                     "LIBBYC", "SGOLDC",
@@ -303,7 +308,9 @@ classify_subbasin <- function(site_code) {
                        # Tillicum Creek temporary array
                        "TLT",
                        # Butcher Creek + Blackbird Pond (per user)
-                       "BCP", "BBP")
+                       "BCP", "BBP",
+                       # Big Meadow Temporary Array (Big Meadow Creek)
+                       "BMT")
   okanogan_codes <- c("OKL")
   cmain_codes    <- c("RIA", "RIS", "RRF", "RRJ", "RREBYP",
                       "MCN", "BON", "JDA", "TDA",
@@ -1100,17 +1107,26 @@ server <- function(input, output, session) {
       )
     }
     if (!is.null(raw$recapture) && nrow(raw$recapture) > 0) {
+      # A "recapture" whose original mark species differs from the
+      # recapture species means the PIT tag was reused on a
+      # different fish (e.g. recovered from a harvested Chinook or
+      # Steelhead, later deployed on an unrelated Bull Trout), not
+      # a genuine journey by the same fish. Drop these before they
+      # can inject a bogus distant subbasin into the tag's history.
+      recap <- raw$recapture |>
+        filter(species_name == recap_species_name)
+
       pieces$recap_at <- tibble(
-        tag_code  = raw$recapture$tag,
-        site_code = extract_site_code(raw$recapture$recap_site),
+        tag_code  = recap$tag,
+        site_code = extract_site_code(recap$recap_site),
         event     = "recap",
-        event_dt  = parse_dt(raw$recapture$recap_date)
+        event_dt  = parse_dt(recap$recap_date)
       )
       pieces$recap_rel <- tibble(
-        tag_code  = raw$recapture$tag,
-        site_code = extract_site_code(raw$recapture$recap_release_site),
+        tag_code  = recap$tag,
+        site_code = extract_site_code(recap$recap_release_site),
         event     = "recap_release",
-        event_dt  = parse_dt(raw$recapture$recap_release_date)
+        event_dt  = parse_dt(recap$recap_release_date)
       )
     }
 

@@ -284,15 +284,28 @@ classify_subbasin <- function(site_code) {
                     "18N", "LTP", "MSB", "MEM",
                     "3D1", "3D2", "3D3", "3D4",
                     # Spring Creek Acclimation Pond (Methow)
-                    "SCP")
-  wells_codes  <- c("WEA", "WEH", "WEHC", "WL1", "WL2", "WLB")
-  entiat_codes <- c("ENL", "ENF", "ENA", "ENM", "ENS", "EWC")
+                    "SCP",
+                    # Early Winters Creek (Methow River Basin per
+                    # PTAGIS site description, not Entiat)
+                    "EWC",
+                    # Whitefish side channel + Methow Fish Hatchery
+                    # outfall (both on the Methow River, not
+                    # Wenatchee -- PTAGIS descriptions confirm)
+                    "MWF", "MSH")
+  wells_codes  <- c("WEA", "WEH", "WEHC", "WLB")
+  entiat_codes <- c("ENL", "ENF", "ENA", "ENM", "ENS",
+                    # Wilson Creek, on the Entiat River between
+                    # Entiat NFH and Entiat River Rd (not Wells)
+                    "WL1", "WL2",
+                    # Tillicum Creek + Silver Creek, tributaries of
+                    # the Mad/Entiat system (not Wenatchee)
+                    "TLT", "TILLIC", "SILVEC")
   wenatchee_codes <- c("LWE", "UWE", "CHL", "CHU", "WTL", "LWN",
-                       "MWE", "MWF", "MSH", "MCL",
+                       "MWE", "MCL",
                        "TUF", "NAL", "NAU",
                        "ICL", "ICM", "IC5",
                        "PEU",
-                       "NAPEEC", "SILVEC", "TILLIC", "ETIENC",
+                       "NAPEEC", "ETIENC",
                        "LEAV", "DRY",
                        # Chiwaukum Creek (Wenatchee trib) and
                        # neighbours coded with 3-letter shortforms
@@ -305,8 +318,6 @@ classify_subbasin <- function(site_code) {
                        "LNF",
                        # East Bank Hatchery (Wenatchee mainstem)
                        "EBO",
-                       # Tillicum Creek temporary array
-                       "TLT",
                        # Butcher Creek + Blackbird Pond (per user)
                        "BCP", "BBP",
                        # Big Meadow Temporary Array (Big Meadow Creek)

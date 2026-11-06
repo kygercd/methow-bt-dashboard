@@ -632,6 +632,7 @@ BIG1C,"Big Creek, lower Columbia River near Knappa, OR",NA,River,NA,NA,NA,NA,46.
 BIG2C,"Big Creek, Middle Fork Salmon River",NA,River,NA,NA,NA,NA,45.157759,-115.12014,522.303.319.029,mrr
 BIG2CT,Big Creek Rotary Screw Trap,NA,TraporWeir,NA,NA,NA,NA,45.103578,-114.852514,522.303.319.029.011,mrr
 BIG3C,"Big Creek, Tributary to Yakima River",NA,River,NA,NA,NA,NA,47.172306,-121.185652,539.315,mrr
+BIG4C,"Big Creek, tributary to Middle Fork John Day River",NA,River,NA,NA,NA,NA,44.77438,-118.7715,351.298.052.063,mrr
 BIG8MC,"Big Eightmile Creek, Lemhi River Basin",NA,River,NA,NA,NA,NA,44.645113,-113.527712,522.303.416.073,mrr
 BIGB2C,"Big Bear Creek, Lemhi River Basin",NA,River,NA,NA,NA,NA,44.662161,-113.104946,522.303.416.092.019,mrr
 BIGBEC,"Big Bear Creek, Potlatch River",NA,River,NA,NA,NA,NA,46.730007,-116.621142,522.224.024.023,mrr
@@ -902,6 +903,7 @@ DEAD2C,Deadman Creek - tributary to Snake River,NA,River,NA,NA,NA,NA,46.62571,-1
 DEAD3C,Deadman Creek - Upper Columbia Basin,NA,River,NA,NA,NA,NA,48.669747,-118.271329,1131.005,mrr
 DEADMC,Deadman Creek,NA,River,NA,NA,NA,NA,46.269038,-115.528207,522.224.120.037.016,mrr
 DEADNF,North Fork Deadman Creek - Upper Columbia Basin,NA,River,NA,NA,NA,NA,48.699134,-118.330317,1031.005.011,mrr
+DEADWC,"Deadwood Creek, Middle Fork John Day River Basin ",NA,River,NA,NA,NA,NA,44.76415,-118.748725,351.298.052.063.008,mrr
 DECKEC,Decker Creek,NA,River,NA,NA,NA,NA,44.058359,-114.917832,522.303.624.001,mrr
 DEEP2C,"Deep Creek, tributary to Bumping River",NA,River,NA,NA,NA,NA,46.790162,-121.326794,539.187.072.029,mrr
 DEEPCK,"Deep Creek, tributary to Columbia River",NA,River,NA,NA,NA,NA,48.875329,-117.709233,1181,mrr
@@ -1106,6 +1108,7 @@ IMNTRP,Imnaha Trap,NA,TraporWeir,NA,NA,NA,NA,45.7637,-116.748,522.308.007,mrr
 IMQP,Imeques Acclimation Pond,NA,AcclimationPond,NA,NA,NA,NA,45.706946,-118.349891,465.128,mrr
 INDI2C,"Indian Creek, tributary to Tillicum Creek",NA,River,NA,NA,NA,NA,47.74867,-120.478319,778.017.003.004,mrr
 INDI3C,"Indian Creek, tributary to upper Grande Ronde River",NA,River,NA,NA,NA,NA,45.425966,-117.814853,522.271.165,mrr
+INDI4C,"Indian Creek, tributary to Middle Fork John Day River",NA,River,NA,NA,NA,NA,44.847154,-118.844188,351.298.052.057,mrr
 INDIAC,"Indian Creek, Middle Fork Salmon River",NA,River,NA,NA,NA,NA,44.832757,-115.226817,522.303.319.110,mrr
 INDINC,Indian Creek - Tributary to North Fork Teanaway River,NA,River,NA,NA,NA,NA,47.321329,-120.811951,539.284.017.007,mrr
 INKANC,Inkaneep Creek - tributary to Okanagan River (Canada),NA,River,NA,NA,NA,NA,49.122381,-119.424608,858.139,mrr

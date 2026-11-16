@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0   # full history so rebase can find merge base
 
@@ -26,13 +26,10 @@ jobs:
           r-version: "release"
           use-public-rspm: true
 
-      - name: Cache R packages
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.R_LIBS_USER }}
-          key: r-${{ runner.os }}-${{ hashFiles('DESCRIPTION') }}
-          restore-keys: r-${{ runner.os }}-
-
+      # No separate actions/cache step: setup-r-dependencies caches
+      # the R library itself, keyed on OS *version*. A key based only
+      # on runner.os restored Ubuntu 24.04 binaries onto 26.04 and
+      # broke stringi (missing libicu74) starting 2026-11-08.
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
